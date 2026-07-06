@@ -180,7 +180,7 @@ class ClaudeIndicator extends PanelMenu.Button {
             const hours    = Math.floor(totalMin / 60);
             const mins     = totalMin % 60;
             return hours > 0
-                ? `${hours}:${String(mins).padStart(2, '0')}h`
+                ? `${hours}:${String(mins).padStart(2, '0')}`
                 : `${mins}m`;
         } catch (_) {
             return '';

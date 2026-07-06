@@ -281,12 +281,13 @@ def get_chrome_cookies(db_paths: list, keyring_label: str,
 #  SELECCIÓN DEL MEJOR NAVEGADOR
 # ══════════════════════════════════════════════════════════════════════════════
 
-def find_all_cookies(domain: str = DOMAIN) -> list:
+def find_best_cookies(domain: str = DOMAIN) -> tuple[dict, str]:
     """
-    Devuelve lista de (cookies, browser_name) ordenada por preferencia:
-    primero los navegadores en ejecución con sesión más reciente.
+    Prueba todos los navegadores y devuelve las cookies del que tenga
+    la sesión de claude.ai más reciente.
+    Prioriza los navegadores que estén en ejecución.
     """
-    candidates = []
+    candidates = []  # [(last_access, cookies, browser_name)]
 
     for browser in BROWSERS:
         dbs = find_cookie_dbs(browser["paths"])
@@ -304,6 +305,7 @@ def find_all_cookies(domain: str = DOMAIN) -> list:
         if not cookies:
             continue
 
+        # Penalizar navegadores que no están en ejecución (restar 10h)
         effective_access = last_access if running else last_access - 36_000
         status = "▶ corriendo" if running else "■ cerrado"
         log(f"  {browser['name']:10s} {status}  "
@@ -311,8 +313,13 @@ def find_all_cookies(domain: str = DOMAIN) -> list:
 
         candidates.append((effective_access, cookies, browser["name"]))
 
+    if not candidates:
+        return {}, ""
+
+    # Elegir el que tenga acceso más reciente
     candidates.sort(key=lambda x: x[0], reverse=True)
-    return [(c, n) for _, c, n in candidates]
+    _, best_cookies, best_name = candidates[0]
+    return best_cookies, best_name
 
 
 def fmt_ago(ts: float) -> str:
@@ -405,12 +412,7 @@ def parse_usage_response(data: dict) -> dict | None:
     if not windows:
         return None
 
-    # Siempre preferir five_hour como ventana principal — es la sesión actual
-    # que muestra Claude.ai en "Current session". Solo usar otra si no existe.
-    if "five_hour" in windows:
-        primary_key = "five_hour"
-    else:
-        primary_key = max(windows, key=lambda k: windows[k]["utilization"])
+    primary_key = max(windows, key=lambda k: windows[k]["utilization"])
     primary     = windows[primary_key]
     pct         = round(primary["utilization"], 1)
     reset_str   = format_reset_time(primary["resets_at"]) if primary["resets_at"] else "N/D"
@@ -469,32 +471,30 @@ def run_once(verbose=True) -> bool:
     if verbose:
         log("Buscando navegador con sesión de claude.ai…")
 
-    candidates = find_all_cookies()
+    cookies, browser_name = find_best_cookies()
 
-    if not candidates:
+    if not cookies:
         log("No se encontró ninguna sesión de claude.ai en ningún navegador.", R)
         return False
 
-    for cookies, browser_name in candidates:
-        log(f"Usando cookies de {BOLD}{browser_name}{NC}", G)
-        usage = fetch_usage(cookies)
-        if usage:
-            save_usage(usage)
-            return True
-        log(f"  {browser_name}: sin datos o acceso denegado — probando siguiente…", Y)
+    log(f"Usando cookies de {BOLD}{browser_name}{NC}", G)
 
-    log("Ningún navegador devolvió datos de uso.", R)
-    log(f"  Para Vivaldi/Chrome: {BOLD}sudo dnf install python3-secretstorage{NC}", Y)
+    usage = fetch_usage(cookies)
+    if usage:
+        save_usage(usage)
+        return True
+
+    log("No se encontraron datos de uso.", Y)
     return False
 
 
 def debug_dump():
     log("Buscando navegador con sesión de claude.ai…")
-    candidates = find_all_cookies()
-    if not candidates:
+    cookies, browser_name = find_best_cookies()
+    if not cookies:
         log("No hay cookies.", R)
         return
-    cookies, browser_name = candidates[0]
+
     log(f"Usando {browser_name}")
     print(f"\n{BOLD}=== Endpoints de claude.ai ==={NC}\n")
 
