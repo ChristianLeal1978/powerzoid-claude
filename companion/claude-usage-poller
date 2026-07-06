@@ -1,0 +1,536 @@
+#!/usr/bin/env python3
+"""
+claude-usage-poller — Consulta claude.ai leyendo cookies del navegador activo.
+
+Detecta automáticamente qué navegador tiene Claude abierto
+(Firefox, Chrome, Vivaldi) y usa sus cookies.
+
+Uso:
+    claude-usage-poller           # consulta única
+    claude-usage-poller --watch   # bucle cada 5 minutos
+    claude-usage-poller --debug   # vuelca respuestas de la API
+"""
+
+import glob, json, os, shutil, sqlite3, subprocess
+import sys, tempfile, time, urllib.request, urllib.error
+from datetime import datetime, timezone
+from pathlib import Path
+
+# ── Rutas y constantes ────────────────────────────────────────────────────────
+USAGE_DIR  = Path.home() / ".local" / "share" / "claude-usage"
+USAGE_FILE = USAGE_DIR / "usage.json"
+DOMAIN     = "claude.ai"
+
+G = "\033[92m"; Y = "\033[93m"; R = "\033[91m"
+B = "\033[2m";  NC = "\033[0m"; BOLD = "\033[1m"
+
+def ts():  return datetime.now().strftime("%H:%M:%S")
+def log(msg, col=""): print(f"{B}[{ts()}]{NC} {col}{msg}{NC}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  CONFIGURACIÓN DE NAVEGADORES
+# ══════════════════════════════════════════════════════════════════════════════
+
+BROWSERS = [
+    {
+        "name"    : "Firefox",
+        "type"    : "firefox",
+        "process" : ["firefox", "firefox-esr"],
+        "paths"   : [
+            "~/.mozilla/firefox/*/cookies.sqlite",
+            "~/.config/mozilla/firefox/*/cookies.sqlite",        # Fedora 44
+            "~/.var/app/org.mozilla.firefox/.mozilla/firefox/*/cookies.sqlite",  # Flatpak
+            "~/snap/firefox/common/.mozilla/firefox/*/cookies.sqlite",           # Snap
+        ],
+    },
+    {
+        "name"    : "Vivaldi",
+        "type"    : "chrome",
+        "process" : ["vivaldi", "vivaldi-bin", "vivaldi-stable"],
+        "paths"   : [
+            "~/.config/vivaldi/Default/Cookies",
+            "~/.config/vivaldi/Profile */Cookies",
+        ],
+        "keyring" : "Vivaldi Safe Storage",
+    },
+    {
+        "name"    : "Chrome",
+        "type"    : "chrome",
+        "process" : ["google-chrome", "google-chrome-stable", "chrome"],
+        "paths"   : [
+            "~/.config/google-chrome/Default/Cookies",
+            "~/.config/google-chrome/Profile */Cookies",
+        ],
+        "keyring" : "Chrome Safe Storage",
+    },
+    {
+        "name"    : "Chromium",
+        "type"    : "chrome",
+        "process" : ["chromium", "chromium-browser"],
+        "paths"   : [
+            "~/.config/chromium/Default/Cookies",
+        ],
+        "keyring" : "Chromium Safe Storage",
+    },
+]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  DETECCIÓN DE NAVEGADOR ACTIVO
+# ══════════════════════════════════════════════════════════════════════════════
+
+def is_running(process_names: list) -> bool:
+    """Comprueba si alguno de los procesos está en ejecución."""
+    for name in process_names:
+        try:
+            r = subprocess.run(["pgrep", "-f", name],
+                               capture_output=True, text=True)
+            if r.stdout.strip():
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def find_cookie_dbs(path_patterns: list) -> list:
+    """Expande los patrones glob y devuelve los archivos encontrados."""
+    dbs = []
+    for pattern in path_patterns:
+        dbs.extend(glob.glob(os.path.expanduser(pattern)))
+    return dbs
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  LECTURA DE COOKIES — FIREFOX
+# ══════════════════════════════════════════════════════════════════════════════
+
+def get_firefox_cookies(db_paths: list, domain: str) -> tuple[dict, float]:
+    """
+    Lee cookies de Firefox (SQLite sin cifrar).
+    Devuelve (cookies_dict, last_access_timestamp).
+    """
+    cookies     = {}
+    last_access = 0.0
+
+    for db_path in db_paths:
+        tmp = None
+        try:
+            fd, tmp = tempfile.mkstemp(suffix=".sqlite")
+            os.close(fd)
+            shutil.copy2(db_path, tmp)
+
+            conn = sqlite3.connect(tmp)
+            cur  = conn.cursor()
+            cur.execute("""
+                SELECT name, value, lastAccessed
+                FROM   moz_cookies
+                WHERE  host LIKE ?
+                ORDER  BY lastAccessed DESC
+            """, (f"%{domain}%",))
+
+            for name, value, accessed in cur.fetchall():
+                if name not in cookies:
+                    cookies[name] = value
+                if accessed > last_access:
+                    last_access = accessed   # microsegundos desde epoch Unix
+            conn.close()
+
+        except Exception as e:
+            log(f"Firefox ({db_path}): {e}", Y)
+        finally:
+            if tmp and os.path.exists(tmp):
+                os.unlink(tmp)
+
+    # Convertir microsegundos a segundos
+    last_access_sec = last_access / 1_000_000 if last_access else 0.0
+    return cookies, last_access_sec
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  LECTURA DE COOKIES — CHROME / VIVALDI / CHROMIUM
+# ══════════════════════════════════════════════════════════════════════════════
+
+def get_chrome_key(keyring_label: str) -> bytes:
+    """
+    Obtiene la clave de cifrado desde GNOME Keyring.
+    Si no está disponible, usa la clave por defecto de Chromium en Linux.
+    """
+    try:
+        import secretstorage
+        bus        = secretstorage.dbus_init()
+        collection = secretstorage.get_default_collection(bus)
+        if collection.is_locked():
+            collection.unlock()
+        for item in collection.get_all_items():
+            if item.get_label() == keyring_label:
+                return item.get_secret()
+    except Exception:
+        pass
+    # Clave por defecto cuando no hay keyring configurado
+    return b"peanuts"
+
+
+def decrypt_chrome_cookie(encrypted: bytes, key: bytes) -> str:
+    """
+    Descifra un valor de cookie de Chromium (formato v10/v11, AES-128-CBC).
+    Requiere el paquete 'cryptography' (python3-cryptography en Fedora).
+    """
+    if not encrypted:
+        return ""
+
+    # Sin cifrar (cookies antiguas o de sesión sin cifrar)
+    if not (encrypted.startswith(b"v10") or encrypted.startswith(b"v11")):
+        try:
+            return encrypted.decode("utf-8")
+        except Exception:
+            return ""
+
+    try:
+        from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+        from cryptography.hazmat.primitives             import hashes
+        from cryptography.hazmat.primitives.ciphers    import Cipher, algorithms, modes
+        from cryptography.hazmat.backends              import default_backend
+
+        payload = encrypted[3:]   # quitar prefijo v10/v11
+
+        # Derivar clave AES-128 con PBKDF2 (1 iteración, salt fijo de Chromium)
+        kdf = PBKDF2HMAC(
+            algorithm  = hashes.SHA1(),
+            length     = 16,
+            salt       = b"saltysalt",
+            iterations = 1,
+            backend    = default_backend(),
+        )
+        aes_key = kdf.derive(key)
+        iv      = b" " * 16   # IV fijo de Chromium
+
+        cipher    = Cipher(algorithms.AES(aes_key), modes.CBC(iv),
+                           backend=default_backend())
+        decryptor = cipher.decryptor()
+        decrypted = decryptor.update(payload) + decryptor.finalize()
+
+        # Quitar padding PKCS5
+        pad = decrypted[-1]
+        return decrypted[:-pad].decode("utf-8")
+
+    except ImportError:
+        log("'cryptography' no instalado — omitiendo cookies cifradas de Chrome.", Y)
+        log("  Para activarlo: sudo dnf install python3-cryptography", Y)
+        return ""
+    except Exception as e:
+        log(f"Error descifrando cookie: {e}", Y)
+        return ""
+
+
+# Chrome almacena tiempos como microsegundos desde 1601-01-01 (época Windows)
+_CHROME_EPOCH_OFFSET = 11_644_473_600  # segundos entre 1601 y 1970
+
+def chrome_ts_to_unix(chrome_ts: int) -> float:
+    """Convierte timestamp de Chrome a Unix timestamp (segundos)."""
+    return max(0.0, chrome_ts / 1_000_000 - _CHROME_EPOCH_OFFSET)
+
+
+def get_chrome_cookies(db_paths: list, keyring_label: str,
+                       domain: str) -> tuple[dict, float]:
+    """
+    Lee y descifra cookies de Chrome/Vivaldi/Chromium.
+    Devuelve (cookies_dict, last_access_unix_timestamp).
+    """
+    aes_key     = get_chrome_key(keyring_label)
+    cookies     = {}
+    last_access = 0.0
+
+    for db_path in db_paths:
+        if not os.path.exists(os.path.expanduser(db_path)):
+            continue
+        tmp = None
+        try:
+            fd, tmp = tempfile.mkstemp(suffix=".sqlite")
+            os.close(fd)
+            shutil.copy2(os.path.expanduser(db_path), tmp)
+
+            conn = sqlite3.connect(tmp)
+            cur  = conn.cursor()
+            cur.execute("""
+                SELECT name, encrypted_value, last_access_utc
+                FROM   cookies
+                WHERE  host_key LIKE ?
+                ORDER  BY last_access_utc DESC
+            """, (f"%{domain}%",))
+
+            for name, enc_value, access_utc in cur.fetchall():
+                value = decrypt_chrome_cookie(enc_value, aes_key)
+                if value and name not in cookies:
+                    cookies[name] = value
+                ts_unix = chrome_ts_to_unix(access_utc)
+                if ts_unix > last_access:
+                    last_access = ts_unix
+            conn.close()
+
+        except Exception as e:
+            log(f"Chrome/Vivaldi ({db_path}): {e}", Y)
+        finally:
+            if tmp and os.path.exists(tmp):
+                os.unlink(tmp)
+
+    return cookies, last_access
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  SELECCIÓN DEL MEJOR NAVEGADOR
+# ══════════════════════════════════════════════════════════════════════════════
+
+def find_all_cookies(domain: str = DOMAIN) -> list:
+    """
+    Devuelve lista de (cookies, browser_name) ordenada por preferencia:
+    primero los navegadores en ejecución con sesión más reciente.
+    """
+    candidates = []
+
+    for browser in BROWSERS:
+        dbs = find_cookie_dbs(browser["paths"])
+        if not dbs:
+            continue
+
+        running = is_running(browser["process"])
+
+        if browser["type"] == "firefox":
+            cookies, last_access = get_firefox_cookies(dbs, domain)
+        else:
+            keyring = browser.get("keyring", "Chrome Safe Storage")
+            cookies, last_access = get_chrome_cookies(dbs, keyring, domain)
+
+        if not cookies:
+            continue
+
+        effective_access = last_access if running else last_access - 36_000
+        status = "▶ corriendo" if running else "■ cerrado"
+        log(f"  {browser['name']:10s} {status}  "
+            f"última sesión: {fmt_ago(last_access)}", B)
+
+        candidates.append((effective_access, cookies, browser["name"]))
+
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    return [(c, n) for _, c, n in candidates]
+
+
+def fmt_ago(ts: float) -> str:
+    """Formatea cuánto tiempo hace desde un timestamp Unix."""
+    if not ts:
+        return "desconocido"
+    diff = time.time() - ts
+    if diff < 60:        return "hace <1 min"
+    if diff < 3600:      return f"hace {int(diff/60)} min"
+    if diff < 86400:     return f"hace {int(diff/3600)} h"
+    return f"hace {int(diff/86400)} días"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  API DE CLAUDE.AI
+# ══════════════════════════════════════════════════════════════════════════════
+
+def cookies_to_header(cookies: dict) -> str:
+    return "; ".join(f"{k}={v}" for k, v in cookies.items())
+
+
+def api_get(path: str, cookies: dict):
+    url     = f"https://claude.ai{path}"
+    headers = {
+        "Cookie"          : cookies_to_header(cookies),
+        "Accept"          : "application/json",
+        "User-Agent"      : "Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0",
+        "Referer"         : "https://claude.ai/",
+        "Accept-Language" : "es-CL,es;q=0.9,en;q=0.8",
+    }
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        log(f"HTTP {e.code} en {path}", Y)
+        return None
+    except Exception as e:
+        log(f"Error en {path}: {e}", R)
+        return None
+
+
+def get_org_uuid(cookies: dict) -> str | None:
+    # Leer caché primero (evita una llamada API en cada ciclo de 60s)
+    if USAGE_FILE.exists():
+        try:
+            cached = json.loads(USAGE_FILE.read_text()).get("_org_uuid")
+            if cached:
+                return cached
+        except Exception:
+            pass
+    # Primera vez: consultar la API
+    orgs = api_get("/api/organizations", cookies)
+    if isinstance(orgs, list) and orgs:
+        return orgs[0].get("uuid") or str(orgs[0].get("id"))
+    return None
+
+
+def format_reset_time(iso_ts: str) -> str:
+    try:
+        dt    = datetime.fromisoformat(iso_ts)
+        local = dt.astimezone()
+        now   = datetime.now(timezone.utc).astimezone()
+        diff_h = (local - now).total_seconds() / 3600
+        if diff_h < 1:
+            mins = int((local - now).total_seconds() / 60)
+            return f"en {mins} min ({local.strftime('%H:%M')})"
+        elif diff_h < 24:
+            return f"hoy {local.strftime('%H:%M')}"
+        else:
+            return local.strftime("%H:%M del %d/%m")
+    except Exception:
+        return iso_ts
+
+
+def parse_usage_response(data: dict) -> dict | None:
+    WINDOWS = [
+        ("five_hour", "5h"), ("seven_day_sonnet", "7d Sonnet"),
+        ("seven_day_opus", "7d Opus"), ("seven_day", "7d"),
+    ]
+    windows = {}
+    for key, label in WINDOWS:
+        w = data.get(key)
+        if w and isinstance(w, dict) and w.get("utilization") is not None:
+            windows[key] = {
+                "label"      : label,
+                "utilization": float(w["utilization"]),
+                "resets_at"  : w.get("resets_at"),
+            }
+    if not windows:
+        return None
+
+    # Siempre preferir five_hour como ventana principal — es la sesión actual
+    # que muestra Claude.ai en "Current session". Solo usar otra si no existe.
+    if "five_hour" in windows:
+        primary_key = "five_hour"
+    else:
+        primary_key = max(windows, key=lambda k: windows[k]["utilization"])
+    primary     = windows[primary_key]
+    pct         = round(primary["utilization"], 1)
+    reset_str   = format_reset_time(primary["resets_at"]) if primary["resets_at"] else "N/D"
+
+    summary = "  |  ".join(
+        f"{w['label']}: {w['utilization']:.0f}%" for w in windows.values()
+    )
+    log(f"  Ventanas: {summary}", B)
+
+    return {
+        "percentage"  : pct,
+        "model"       : f"Claude Max ({primary['label']})",
+        "reset_at"    : reset_str,
+        "reset_at_iso": primary["resets_at"] or "",   # ISO para cálculo en la extensión
+        "window"      : primary_key,
+    }
+
+
+def fetch_usage(cookies: dict) -> dict | None:
+    org_uuid = get_org_uuid(cookies)
+    if not org_uuid:
+        log("No se pudo obtener el UUID de la organización.", R)
+        return None
+    log(f"Consultando uso para org {org_uuid[:8]}…", B)
+    data = api_get(f"/api/organizations/{org_uuid}/usage", cookies)
+    result = parse_usage_response(data) if data else None
+    if result:
+        result["_org_uuid"] = org_uuid   # para caché
+    return result
+
+
+def save_usage(usage: dict):
+    USAGE_DIR.mkdir(parents=True, exist_ok=True)
+    existing = {}
+    if USAGE_FILE.exists():
+        try:
+            existing = json.loads(USAGE_FILE.read_text())
+        except Exception:
+            pass
+    merged = {**existing, **usage}
+    merged["updated_at"] = datetime.now().strftime("%H:%M  %d/%m/%Y")
+    merged["source"]     = "poller"
+    # Cachear UUID si está en el payload (lo añade fetch_usage)
+    if "_org_uuid" in usage:
+        merged["_org_uuid"] = usage["_org_uuid"]
+    USAGE_FILE.write_text(json.dumps(merged, indent=2, ensure_ascii=False))
+    log(f"Guardado: {merged.get('percentage','?')}%  "
+        f"({merged.get('used','?')}/{merged.get('limit','?')})", G)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  ENTRYPOINTS
+# ══════════════════════════════════════════════════════════════════════════════
+
+def run_once(verbose=True) -> bool:
+    if verbose:
+        log("Buscando navegador con sesión de claude.ai…")
+
+    candidates = find_all_cookies()
+
+    if not candidates:
+        log("No se encontró ninguna sesión de claude.ai en ningún navegador.", R)
+        return False
+
+    for cookies, browser_name in candidates:
+        log(f"Usando cookies de {BOLD}{browser_name}{NC}", G)
+        usage = fetch_usage(cookies)
+        if usage:
+            save_usage(usage)
+            return True
+        log(f"  {browser_name}: sin datos o acceso denegado — probando siguiente…", Y)
+
+    log("Ningún navegador devolvió datos de uso.", R)
+    log(f"  Para Vivaldi/Chrome: {BOLD}sudo dnf install python3-secretstorage{NC}", Y)
+    return False
+
+
+def debug_dump():
+    log("Buscando navegador con sesión de claude.ai…")
+    candidates = find_all_cookies()
+    if not candidates:
+        log("No hay cookies.", R)
+        return
+    cookies, browser_name = candidates[0]
+    log(f"Usando {browser_name}")
+    print(f"\n{BOLD}=== Endpoints de claude.ai ==={NC}\n")
+
+    org_uuid = get_org_uuid(cookies)
+    endpoints = ["/api/account", "/api/bootstrap", "/api/organizations"]
+    if org_uuid:
+        endpoints += [
+            f"/api/organizations/{org_uuid}/usage",
+            f"/api/organizations/{org_uuid}/rate_limits",
+        ]
+
+    for ep in endpoints:
+        print(f"{BOLD}── {ep} ──{NC}")
+        data = api_get(ep, cookies)
+        print(json.dumps(data, indent=2, ensure_ascii=False)[:1500] if data else "  (sin respuesta)")
+        print()
+
+
+def main():
+    import argparse
+    p = argparse.ArgumentParser(prog="claude-usage-poller")
+    p.add_argument("--watch",    action="store_true", help="Bucle cada N segundos")
+    p.add_argument("--interval", type=int, default=300)
+    p.add_argument("--debug",    action="store_true", help="Vuelca respuestas API")
+    args = p.parse_args()
+
+    if args.debug:
+        debug_dump()
+    elif args.watch:
+        log(f"Modo watch — cada {args.interval}s  (Ctrl+C para detener)")
+        while True:
+            run_once(verbose=False)
+            time.sleep(args.interval)
+    else:
+        sys.exit(0 if run_once() else 1)
+
+
+if __name__ == "__main__":
+    main()

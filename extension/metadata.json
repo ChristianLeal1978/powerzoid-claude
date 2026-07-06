@@ -1,0 +1,8 @@
+{
+  "name": "Claude Usage Monitor",
+  "description": "Muestra el porcentaje de uso de tu sesión de Claude en la barra superior del sistema.",
+  "uuid": "claude-usage@cnavarro.cl",
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "version": 1,
+  "url": "https://github.com/cnavarro/claude-usage-gnome"
+}

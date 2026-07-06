@@ -1,0 +1,21 @@
+[Unit]
+Description=Claude Usage Monitor — servidor HTTP local
+Documentation=https://github.com/cnavarro/claude-usage-gnome
+# Arrancar después de que la sesión gráfica esté disponible
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/claude-usage-server
+Restart=on-failure
+RestartSec=5
+
+# Restringir el proceso solo a localhost (seguridad)
+Environment="PYTHONUNBUFFERED=1"
+
+# Log al journal del usuario: journalctl --user -u claude-usage-server -f
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

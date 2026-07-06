@@ -1,0 +1,158 @@
+#!/usr/bin/env python3
+"""
+claude-usage-server — Servidor HTTP local para la extensión Claude Usage Monitor
+Escucha en http://127.0.0.1:7891 y recibe datos del userscript del navegador.
+
+Escribe los datos en:
+  ~/.local/share/claude-usage/usage.json
+
+La extensión GNOME lee ese archivo automáticamente.
+"""
+
+import json
+import sys
+from datetime import datetime
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+
+# ── Configuración ─────────────────────────────────────────────────────────
+HOST       = "127.0.0.1"
+PORT       = 7891
+USAGE_DIR  = Path.home() / ".local" / "share" / "claude-usage"
+USAGE_FILE = USAGE_DIR / "usage.json"
+
+# Solo aceptar peticiones desde claude.ai
+ALLOWED_ORIGINS = {
+    "https://claude.ai",
+    "https://www.claude.ai",
+}
+
+# ── Colores para el log ───────────────────────────────────────────────────
+G = "\033[92m"; Y = "\033[93m"; R = "\033[91m"; D = "\033[2m"; NC = "\033[0m"
+
+def ts():
+    return datetime.now().strftime("%H:%M:%S")
+
+def pct_bar(pct, width=20):
+    filled = round(min(100, max(0, pct)) / 100 * width)
+    return "▓" * filled + "░" * (width - filled)
+
+
+# ── Handler HTTP ──────────────────────────────────────────────────────────
+class UsageHandler(BaseHTTPRequestHandler):
+
+    def log_message(self, fmt, *args):
+        pass  # desactivar log por defecto de BaseHTTPRequestHandler
+
+    def _cors_headers(self, origin):
+        """Emite cabeceras CORS solo si el origen es claude.ai"""
+        if origin in ALLOWED_ORIGINS:
+            self.send_header("Access-Control-Allow-Origin", origin)
+        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Max-Age", "86400")
+
+    def do_OPTIONS(self):
+        """Preflight CORS — el navegador lo envía antes del POST real"""
+        origin = self.headers.get("Origin", "")
+        self.send_response(204)
+        self._cors_headers(origin)
+        self.end_headers()
+
+    def do_POST(self):
+        origin = self.headers.get("Origin", "")
+
+        # Permitir:  (a) origen vacío → GM_xmlhttpRequest de Violentmonkey/Tampermonkey
+        #            (b) origen explícito de claude.ai → fetch normal desde la página
+        # Rechazar:  cualquier origen explícito que no sea claude.ai
+        # Nota: el servidor solo escucha en 127.0.0.1, así que toda conexión
+        #       que llega aquí ya es local por definición.
+        if origin and origin not in ALLOWED_ORIGINS:
+            self.send_response(403)
+            self.end_headers()
+            print(f"{R}[{ts()}] Origen rechazado: {origin}{NC}", file=sys.stderr)
+            return
+
+        if self.path != "/update":
+            self.send_response(404)
+            self.end_headers()
+            return
+
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            body   = self.rfile.read(length)
+            data   = json.loads(body)
+
+            # Validación mínima
+            if not isinstance(data, dict):
+                raise ValueError("Se esperaba un objeto JSON")
+
+            pct = data.get("percentage")
+            if pct is None:
+                raise ValueError("Falta el campo 'percentage'")
+
+            # Añadir timestamp de recepción
+            data["updated_at"] = datetime.now().strftime("%H:%M  %d/%m/%Y")
+
+            # Escribir a disco
+            USAGE_DIR.mkdir(parents=True, exist_ok=True)
+            USAGE_FILE.write_text(
+                json.dumps(data, indent=2, ensure_ascii=False),
+                encoding="utf-8"
+            )
+
+            # Log compacto en consola
+            pct_f   = float(pct)
+            col     = R if pct_f >= 90 else Y if pct_f >= 60 else G
+            bar     = pct_bar(pct_f, 15)
+            used    = data.get("used",  "?")
+            limit   = data.get("limit", "?")
+            model   = data.get("model", "Claude")
+            print(f"{D}[{ts()}]{NC} {col}{bar} {pct_f:.0f}%{NC}  "
+                  f"{D}{used}/{limit}  {model}{NC}")
+
+            # Respuesta OK
+            resp = json.dumps({"ok": True}).encode()
+            self.send_response(200)
+            self._cors_headers(origin)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(resp)))
+            self.end_headers()
+            self.wfile.write(resp)
+
+        except json.JSONDecodeError as e:
+            print(f"{R}[{ts()}] JSON inválido: {e}{NC}", file=sys.stderr)
+            self.send_response(400)
+            self.end_headers()
+        except Exception as e:
+            print(f"{R}[{ts()}] Error: {e}{NC}", file=sys.stderr)
+            self.send_response(500)
+            self.end_headers()
+
+
+# ── Entrypoint ────────────────────────────────────────────────────────────
+def main():
+    USAGE_DIR.mkdir(parents=True, exist_ok=True)
+
+    try:
+        server = HTTPServer((HOST, PORT), UsageHandler)
+    except OSError as e:
+        if e.errno == 98:  # Address already in use
+            print(f"{R}Error:{NC} el puerto {PORT} ya está en uso.")
+            print(f"Verifica con:  ss -tlnp | grep {PORT}")
+            sys.exit(1)
+        raise
+
+    print(f"{G}Claude Usage Server iniciado{NC}")
+    print(f"  Escuchando en  http://{HOST}:{PORT}")
+    print(f"  Datos en       {USAGE_FILE}")
+    print(f"  Ctrl+C para detener\n")
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print(f"\n{D}Servidor detenido.{NC}")
+
+
+if __name__ == "__main__":
+    main()
