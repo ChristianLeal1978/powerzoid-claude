@@ -112,6 +112,11 @@ class ClaudeIndicator extends PanelMenu.Button {
         this._menuReset = new PopupMenu.PopupMenuItem('', { reactive: false });
         this.menu.addMenuItem(this._menuReset);
 
+        // Créditos de API restantes (opcional, entrada manual)
+        this._menuCredits = new PopupMenu.PopupMenuItem('', { reactive: false });
+        this._menuCredits.visible = false;
+        this.menu.addMenuItem(this._menuCredits);
+
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
         // Botón: Actualizar
@@ -236,6 +241,19 @@ class ClaudeIndicator extends PanelMenu.Button {
         let resetLine = `  Reset: ${resetAt}`;
         if (updAt) resetLine += `   ·   ${updAt}`;
         this._menuReset.label.set_text(resetLine);
+
+        // ── Créditos de API (opcional) ──
+        const credits = d.api_credits_usd;
+        if (credits !== undefined && credits !== null) {
+            const total = d.api_credits_total_usd;
+            const text  = total
+                ? `  💳 Créditos API: $${Number(credits).toFixed(2)} / $${Number(total).toFixed(2)}`
+                : `  💳 Créditos API: $${Number(credits).toFixed(2)}`;
+            this._menuCredits.label.set_text(text);
+            this._menuCredits.visible = true;
+        } else {
+            this._menuCredits.visible = false;
+        }
     }
 
     _renderEmpty(msg = 'Sin datos') {
@@ -245,6 +263,7 @@ class ClaudeIndicator extends PanelMenu.Button {
         this._menuBar.label.set_text(`  ${msg}`);
         this._menuStats.label.set_text('');
         this._menuReset.label.set_text('  Comando: claude-usage set 75');
+        this._menuCredits.visible = false;
     }
 
     // ── Limpieza ──────────────────────────────────────────────────────────

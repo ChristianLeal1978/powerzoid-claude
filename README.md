@@ -15,6 +15,7 @@ Al hacer clic se despliega:
   Mensajes: 86 / 200
   Reset: mañana 09:00   ·   14:30  08/06/2026
 
+  💳 Créditos API: $42.50 / $100.00
   ─────────────────────────────
   ↻  Actualizar ahora
   ↗  Abrir Claude.ai
@@ -73,6 +74,25 @@ claude-usage reset
 claude-usage reset --reset-at "09:00 del 09/06/2026"
 ```
 
+### Créditos de la API de Anthropic
+
+Anthropic **no expone una API pública** para consultar el saldo de créditos de tu cuenta
+(solo se ve en [console.anthropic.com](https://console.anthropic.com)). Por eso, igual que
+con el uso de sesión, lo registras manualmente y la extensión lo muestra:
+
+```bash
+# Solo el saldo restante
+claude-usage credits 42.50
+
+# Con el total asignado/comprado (para ver una barra de progreso)
+claude-usage credits 42.50 --total 100
+
+# Ver el saldo guardado
+claude-usage credits
+```
+
+Aparece como una línea adicional en el menú desplegable y también en `claude-usage status`.
+
 ### Flujo típico de uso
 
 1. Abres Claude.ai y trabajas normalmente
@@ -112,7 +132,10 @@ Puedes editarlo directamente:
   "model": "Claude Sonnet 4.5",
   "plan": "Pro",
   "reset_at": "mañana 09:00",
-  "updated_at": "14:30  08/06/2026"
+  "updated_at": "14:30  08/06/2026",
+  "api_credits_usd": 42.50,
+  "api_credits_total_usd": 100.0,
+  "api_credits_updated_at": "14:30  08/06/2026"
 }
 ```
 

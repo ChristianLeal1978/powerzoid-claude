@@ -84,6 +84,55 @@ def save_config(cfg: dict):
     os.chmod(CONFIG_FILE, 0o600)  # solo el usuario puede leer la API key
 
 
+# ── Subcomando: credits ───────────────────────────────────────────────────
+def cmd_credits(args):
+    data = load_usage()
+
+    if args.amount is not None:
+        data["api_credits_usd"] = round(args.amount, 2)
+    if args.total is not None:
+        data["api_credits_total_usd"] = round(args.total, 2)
+
+    if args.amount is None and args.total is None:
+        credits = data.get("api_credits_usd")
+        if credits is None:
+            print(f"{YELLOW}Sin créditos registrados.{RESET}")
+            print(f"Usa:  {BOLD}claude-usage credits 42.50{RESET}")
+            print(f"  o:  {BOLD}claude-usage credits 42.50 --total 100{RESET}")
+            return
+        _print_credits(data)
+        return
+
+    data["api_credits_updated_at"] = datetime.now().strftime("%H:%M  %d/%m/%Y")
+    save_usage(data)
+    print(f"{GREEN}✓ Créditos guardados{RESET}  →  {DIM}{USAGE_FILE}{RESET}")
+    print()
+    _print_credits(data)
+
+
+def _print_credits(data: dict):
+    credits = data.get("api_credits_usd")
+    total   = data.get("api_credits_total_usd")
+    upd_at  = data.get("api_credits_updated_at", "N/D")
+
+    if credits is None:
+        return
+
+    line = "─" * 44
+    print(f"\n{BOLD}{line}{RESET}")
+    if total:
+        pct     = max(0.0, min(100.0, credits / total * 100)) if total > 0 else 0.0
+        col     = color_for(100 - pct)  # más créditos restantes = mejor (verde)
+        filled  = round(pct / 100 * 30)
+        bar     = "▓" * filled + "░" * (30 - filled)
+        print(f"  {BOLD}Créditos API{RESET}")
+        print(f"  {col}{bar}{RESET}  {BOLD}{col}${credits:.2f}{RESET} / ${total:.2f}")
+    else:
+        print(f"  {BOLD}Créditos API{RESET}  ·  {GREEN}${credits:.2f}{RESET} restantes")
+    print(f"  Actualiz. : {DIM}{upd_at}{RESET}")
+    print(f"{BOLD}{line}{RESET}\n")
+
+
 # ── Subcomando: set ───────────────────────────────────────────────────────
 def cmd_set(args):
     data = load_usage()
@@ -150,6 +199,13 @@ def _print_status(data: dict):
     print(f"  Mensajes  : {BOLD}{used}{RESET} / {limit}")
     print(f"  Reset     : {reset_at}")
     print(f"  Actualiz. : {DIM}{upd_at}{RESET}")
+
+    credits = data.get("api_credits_usd")
+    if credits is not None:
+        total = data.get("api_credits_total_usd")
+        suffix = f" / ${total:.2f}" if total else ""
+        print(f"  Créditos  : {GREEN}${credits:.2f}{RESET}{suffix}")
+
     print(f"{BOLD}{line}{RESET}\n")
 
 
@@ -261,6 +317,8 @@ Ejemplos:
   claude-usage reset --reset-at "09:00 del 09/06/2026"
   claude-usage config --api-key sk-ant-...
   claude-usage fetch
+  claude-usage credits 42.50
+  claude-usage credits 42.50 --total 100
         """,
     )
     sub = p.add_subparsers(dest="command", metavar="<comando>")
@@ -293,6 +351,13 @@ Ejemplos:
     # fetch
     sub.add_parser("fetch", help="Intenta obtener uso desde la API de Anthropic")
 
+    # credits
+    pcr = sub.add_parser("credits", help="Establece los créditos de API restantes (manual)")
+    pcr.add_argument("amount", type=float, nargs="?",
+                      help="Créditos restantes en USD, e.g.: claude-usage credits 42.50")
+    pcr.add_argument("--total", type=float, metavar="USD",
+                      help="Créditos totales comprados/asignados, para mostrar la barra de progreso")
+
     return p
 
 
@@ -306,6 +371,7 @@ def main():
         "reset":  cmd_reset,
         "config": cmd_config,
         "fetch":  cmd_fetch,
+        "credits": cmd_credits,
     }
 
     fn = dispatch.get(args.command)
