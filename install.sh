@@ -40,11 +40,12 @@ fi
 # ── 2. Herramientas CLI ───────────────────────────────────────────
 h "2. Herramientas CLI"
 mkdir -p "$BIN_DIR"
-cp "$DIR/companion/claude-usage"        "$BIN_DIR/claude-usage"
-cp "$DIR/companion/claude-usage-server" "$BIN_DIR/claude-usage-server"
-cp "$DIR/companion/claude-usage-poller" "$BIN_DIR/claude-usage-poller"
+cp "$DIR/companion/claude-usage"                 "$BIN_DIR/claude-usage"
+cp "$DIR/companion/claude-usage-server"          "$BIN_DIR/claude-usage-server"
+cp "$DIR/companion/claude-usage-poller"          "$BIN_DIR/claude-usage-poller"
+cp "$DIR/companion/claude-usage-credits-poller"  "$BIN_DIR/claude-usage-credits-poller"
 chmod +x "$BIN_DIR"/claude-usage*
-ok "claude-usage, claude-usage-server, claude-usage-poller → $BIN_DIR"
+ok "claude-usage, claude-usage-server, claude-usage-poller, claude-usage-credits-poller → $BIN_DIR"
 
 # PATH
 if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
@@ -55,9 +56,11 @@ fi
 # ── 3. Servicios systemd ──────────────────────────────────────────
 h "3. Servicios systemd"
 mkdir -p "$SERVICE_DIR"
-cp "$DIR/companion/claude-usage-server.service"  "$SERVICE_DIR/"
-cp "$DIR/companion/claude-usage-poller.service"  "$SERVICE_DIR/"
-cp "$DIR/companion/claude-usage-poller.timer"    "$SERVICE_DIR/"
+cp "$DIR/companion/claude-usage-server.service"          "$SERVICE_DIR/"
+cp "$DIR/companion/claude-usage-poller.service"          "$SERVICE_DIR/"
+cp "$DIR/companion/claude-usage-poller.timer"            "$SERVICE_DIR/"
+cp "$DIR/companion/claude-usage-credits-poller.service"  "$SERVICE_DIR/"
+cp "$DIR/companion/claude-usage-credits-poller.timer"    "$SERVICE_DIR/"
 systemctl --user daemon-reload
 
 # Servidor HTTP local
@@ -75,6 +78,19 @@ systemctl --user is-active --quiet claude-usage-poller.timer \
 # Ejecutar poller ahora para tener datos inmediatamente
 info "Obteniendo uso actual desde claude.ai…"
 "$BIN_DIR/claude-usage-poller" 2>/dev/null && ok "Datos obtenidos" || warn "No se pudieron obtener datos (abre Firefox con claude.ai primero)"
+
+# Créditos de la API (Playwright) — requiere login manual una sola vez
+if python3 -c "import playwright" &>/dev/null; then
+    systemctl --user enable --now claude-usage-credits-poller.timer 2>/dev/null || true
+    ok "Poller de créditos de API instalado (cada 30 min)"
+    warn "Falta iniciar sesión una vez:  claude-usage-credits-poller --login"
+else
+    warn "Playwright no está instalado — el poller de créditos de API no funcionará."
+    echo -e "     Instálalo con:"
+    echo -e "       ${BOLD}pip install --user playwright${NC}"
+    echo -e "       ${BOLD}python3 -m playwright install chromium${NC}"
+    echo -e "     Luego: ${BOLD}systemctl --user enable --now claude-usage-credits-poller.timer${NC}"
+fi
 
 # ── Resumen ───────────────────────────────────────────────────────
 USERSCRIPT="$(cd "$DIR" && pwd)/userscript/claude-usage-monitor.user.js"
@@ -95,7 +111,12 @@ echo ""
 echo -e "${BOLD}Paso 3:${NC} Cierra sesión y vuelve a entrar para cargar la extensión GNOME"
 echo -e "  ${DIM}(necesario en Wayland — solo la primera vez)${NC}"
 echo ""
+echo -e "${BOLD}Paso 4:${NC} Inicia sesión una vez para ver tus créditos de la API automáticamente"
+echo -e "  ${BOLD}claude-usage-credits-poller --login${NC}"
+echo -e "  ${DIM}(abre un navegador, inicias sesión en platform.claude.com y listo — se actualiza solo cada 30 min)${NC}"
+echo ""
 echo -e "${DIM}Estado:   gnome-extensions info $EXTENSION_UUID${NC}"
 echo -e "${DIM}Logs:     journalctl --user -u claude-usage-server -f${NC}"
 echo -e "${DIM}Poller:   journalctl --user -u claude-usage-poller -f${NC}"
+echo -e "${DIM}Créditos: journalctl --user -u claude-usage-credits-poller -f${NC}"
 echo ""

@@ -1,0 +1,10 @@
+[Unit]
+Description=Ejecuta claude-usage-credits-poller cada 30 minutos
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=30min
+Unit=claude-usage-credits-poller.service
+
+[Install]
+WantedBy=timers.target

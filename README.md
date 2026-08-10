@@ -74,24 +74,51 @@ claude-usage reset
 claude-usage reset --reset-at "09:00 del 09/06/2026"
 ```
 
-### Créditos de la API de Anthropic
+### Créditos de la API de Anthropic (automático)
 
 Anthropic **no expone una API pública** para consultar el saldo de créditos de tu cuenta
-(solo se ve en [console.anthropic.com](https://console.anthropic.com)). Por eso, igual que
-con el uso de sesión, lo registras manualmente y la extensión lo muestra:
+(solo se ve en el Dashboard de [platform.claude.com](https://platform.claude.com/dashboard),
+en la tarjeta "Organization credits"). Para no tener que copiarlo a mano, `claude-usage-credits-poller`
+usa un navegador Chromium controlado por [Playwright](https://playwright.dev/) con una sesión
+propia y persistente para leerlo automáticamente.
+
+**Instalación (una sola vez):**
 
 ```bash
-# Solo el saldo restante
-claude-usage credits 42.50
-
-# Con el total asignado/comprado (para ver una barra de progreso)
-claude-usage credits 42.50 --total 100
-
-# Ver el saldo guardado
-claude-usage credits
+pip install --user playwright
+python3 -m playwright install chromium
 ```
 
-Aparece como una línea adicional en el menú desplegable y también en `claude-usage status`.
+**Inicia sesión una sola vez** (se abre un navegador visible; inicias sesión normalmente
+en `platform.claude.com` y vuelves a la terminal a presionar Enter):
+
+```bash
+claude-usage-credits-poller --login
+```
+
+La sesión queda guardada en `~/.local/share/claude-usage/browser-profile` — un perfil de
+Chromium dedicado que no toca tu navegador normal. Desde ahí, el timer de systemd
+(`claude-usage-credits-poller.timer`) consulta el saldo cada 30 minutos en segundo plano,
+sin ventanas visibles:
+
+```bash
+systemctl --user status claude-usage-credits-poller.timer
+journalctl --user -u claude-usage-credits-poller -f   # ver logs
+claude-usage-credits-poller                            # forzar una consulta ahora
+```
+
+Si la sesión expira (cookies vencidas), el poller lo indica en el log — vuelve a correr
+`--login` y sigue automático.
+
+El saldo aparece como una línea en el menú desplegable de la extensión y en `claude-usage status`.
+
+**Alternativa manual** (si prefieres no usar Playwright, o para corregir el valor a mano):
+
+```bash
+claude-usage credits 42.50
+claude-usage credits 42.50 --total 100   # con el total, para ver una barra de progreso
+claude-usage credits                     # ver el valor guardado
+```
 
 ### Flujo típico de uso
 
@@ -141,14 +168,21 @@ Puedes editarlo directamente:
 
 ---
 
-## ¿Por qué no se actualiza solo?
+## ¿Por qué no se actualiza solo desde una API oficial?
 
-Claude.ai **no tiene una API pública** para consultar los límites de sesión de un usuario.
-Esta extensión usa un archivo local que tú actualizas con el CLI. Es la única forma confiable
-sin depender de scraping (que es frágil y puede violar los términos de servicio).
+Ni el uso de sesión de Claude.ai ni el saldo de créditos de la API tienen un endpoint público
+documentado por Anthropic. Por eso esta extensión combina tres fuentes, de más a menos directa:
 
-Si en el futuro Anthropic publica una API para esto, se puede agregar la funcionalidad
-con `claude-usage fetch` — el comando ya está preparado para ello.
+1. **`claude-usage set`** — entrada manual, siempre funciona como respaldo.
+2. **`claude-usage-poller`** — lee las cookies de sesión de tu navegador (Firefox/Chrome/Vivaldi)
+   y consulta el endpoint interno que usa la propia web de claude.ai.
+3. **`claude-usage-credits-poller`** — usa un navegador Chromium controlado por Playwright,
+   con tu propia sesión iniciada una vez, para leer el saldo desde el Dashboard del Console.
+
+Las opciones 2 y 3 dependen de la estructura interna de las páginas de Anthropic y pueden
+romperse si esta cambia — en ese caso, `claude-usage set` / `claude-usage credits` siguen
+funcionando como respaldo manual. Si en el futuro Anthropic publica APIs oficiales para
+esto, `claude-usage fetch` ya está preparado para usarlas.
 
 ---
 
@@ -160,8 +194,10 @@ bash install.sh --uninstall   # próximamente
 # O manualmente:
 gnome-extensions disable claude-usage@cnavarro.cl
 rm -rf ~/.local/share/gnome-shell/extensions/claude-usage@cnavarro.cl
-rm ~/.local/bin/claude-usage
-rm -rf ~/.local/share/claude-usage    # ← solo si quieres borrar los datos
+systemctl --user disable --now claude-usage-poller.timer claude-usage-credits-poller.timer claude-usage-server.service
+rm ~/.local/bin/claude-usage ~/.local/bin/claude-usage-server ~/.local/bin/claude-usage-poller ~/.local/bin/claude-usage-credits-poller
+rm ~/.config/systemd/user/claude-usage-*.{service,timer}
+rm -rf ~/.local/share/claude-usage    # ← borra datos y la sesión del navegador de créditos
 ```
 
 ---
