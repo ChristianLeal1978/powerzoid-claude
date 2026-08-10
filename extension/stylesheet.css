@@ -15,6 +15,13 @@
     min-width: 38px;
 }
 
+.claude-usage-credits-panel {
+    font-size: 12px;
+    font-weight: bold;
+    color: #a6e3a1;   /* verde suave — saldo disponible */
+    margin-right: 4px;
+}
+
 /* ── Elementos del menú desplegable ────────────────────────────────────── */
 .claude-menu-model {
     font-weight: bold;

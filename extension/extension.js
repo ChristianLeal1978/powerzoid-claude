@@ -66,6 +66,13 @@ class ClaudeIndicator extends PanelMenu.Button {
         // ── Widget en la barra superior ──
         const box = new St.BoxLayout({ style_class: 'panel-status-menu-box' });
 
+        this._creditsPanelLabel = new St.Label({
+            text: '',
+            y_align: Clutter.ActorAlign.CENTER,
+            style_class: 'claude-usage-credits-panel',
+        });
+        this._creditsPanelLabel.visible = false;
+
         this._iconLabel = new St.Label({
             text: ICON_NEUTRAL,
             y_align: Clutter.ActorAlign.CENTER,
@@ -78,6 +85,7 @@ class ClaudeIndicator extends PanelMenu.Button {
             style_class: 'claude-usage-pct',
         });
 
+        box.add_child(this._creditsPanelLabel);
         box.add_child(this._iconLabel);
         box.add_child(this._pctLabel);
         this.add_child(box);
@@ -230,6 +238,14 @@ class ClaudeIndicator extends PanelMenu.Button {
             timeLeft ? ` ${pct}% · ${timeLeft}` : ` ${pct}%`
         );
 
+        const panelCredits = d.api_credits_usd;
+        if (panelCredits !== undefined && panelCredits !== null) {
+            this._creditsPanelLabel.set_text(`💳 $${Number(panelCredits).toFixed(2)} `);
+            this._creditsPanelLabel.visible = true;
+        } else {
+            this._creditsPanelLabel.visible = false;
+        }
+
         // ── Menú ──
         this._menuModel.label.set_text(`  ${model}${plan}`);
 
@@ -264,6 +280,7 @@ class ClaudeIndicator extends PanelMenu.Button {
         this._menuStats.label.set_text('');
         this._menuReset.label.set_text('  Comando: claude-usage set 75');
         this._menuCredits.visible = false;
+        this._creditsPanelLabel.visible = false;
     }
 
     // ── Limpieza ──────────────────────────────────────────────────────────
