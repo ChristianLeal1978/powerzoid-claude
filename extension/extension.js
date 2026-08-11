@@ -190,11 +190,12 @@ class ClaudeIndicator extends PanelMenu.Button {
             const diffMs  = resetMs - nowMs;
             if (diffMs <= 0) return '↺';
             const totalMin = Math.floor(diffMs / 60000);
-            const hours    = Math.floor(totalMin / 60);
+            const days     = Math.floor(totalMin / 1440);
+            const hours    = Math.floor((totalMin % 1440) / 60);
             const mins     = totalMin % 60;
-            return hours > 0
-                ? `${hours}:${String(mins).padStart(2, '0')}`
-                : `${mins}m`;
+            if (days > 0)  return `${days}d ${hours}h`;
+            if (hours > 0) return `${hours}:${String(mins).padStart(2, '0')}`;
+            return `${mins}m`;
         } catch (_) {
             return '';
         }
