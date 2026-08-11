@@ -412,7 +412,9 @@ def parse_usage_response(data: dict) -> dict | None:
     if not windows:
         return None
 
-    primary_key = max(windows, key=lambda k: windows[k]["utilization"])
+    primary_key = "five_hour" if "five_hour" in windows else max(
+        windows, key=lambda k: windows[k]["utilization"]
+    )
     primary     = windows[primary_key]
     pct         = round(primary["utilization"], 1)
     reset_str   = format_reset_time(primary["resets_at"]) if primary["resets_at"] else "N/D"
