@@ -13,7 +13,9 @@
  *     "model": "Claude Sonnet 4.5",
  *     "plan": "Pro",
  *     "reset_at": "mañana 09:00",
- *     "updated_at": "14:30 08/06/2026"
+ *     "updated_at": "14:30 08/06/2026",
+ *     "api_credits_usd": 48.41,
+ *     "usage_credits_balance_usd": 7.57
  *   }
  */
 
@@ -85,9 +87,17 @@ class ClaudeIndicator extends PanelMenu.Button {
             style_class: 'claude-usage-pct',
         });
 
+        this._usageCreditsPanelLabel = new St.Label({
+            text: '',
+            y_align: Clutter.ActorAlign.CENTER,
+            style_class: 'claude-usage-credits-panel',
+        });
+        this._usageCreditsPanelLabel.visible = false;
+
         box.add_child(this._creditsPanelLabel);
         box.add_child(this._iconLabel);
         box.add_child(this._pctLabel);
+        box.add_child(this._usageCreditsPanelLabel);
         this.add_child(box);
 
         // ── Menú desplegable ──
@@ -124,6 +134,11 @@ class ClaudeIndicator extends PanelMenu.Button {
         this._menuCredits = new PopupMenu.PopupMenuItem('', { reactive: false });
         this._menuCredits.visible = false;
         this.menu.addMenuItem(this._menuCredits);
+
+        // Saldo de "usage credits" (claude.ai, cubre excedentes del plan)
+        this._menuUsageCreditsBalance = new PopupMenu.PopupMenuItem('', { reactive: false });
+        this._menuUsageCreditsBalance.visible = false;
+        this.menu.addMenuItem(this._menuUsageCreditsBalance);
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
@@ -247,6 +262,14 @@ class ClaudeIndicator extends PanelMenu.Button {
             this._creditsPanelLabel.visible = false;
         }
 
+        const panelBalance = d.usage_credits_balance_usd;
+        if (panelBalance !== undefined && panelBalance !== null) {
+            this._usageCreditsPanelLabel.set_text(` 💰 $${Number(panelBalance).toFixed(2)}`);
+            this._usageCreditsPanelLabel.visible = true;
+        } else {
+            this._usageCreditsPanelLabel.visible = false;
+        }
+
         // ── Menú ──
         this._menuModel.label.set_text(`  ${model}${plan}`);
 
@@ -271,6 +294,17 @@ class ClaudeIndicator extends PanelMenu.Button {
         } else {
             this._menuCredits.visible = false;
         }
+
+        // ── Saldo de usage credits (claude.ai) ──
+        const balance = d.usage_credits_balance_usd;
+        if (balance !== undefined && balance !== null) {
+            this._menuUsageCreditsBalance.label.set_text(
+                `  💰 Usage credits: $${Number(balance).toFixed(2)}`
+            );
+            this._menuUsageCreditsBalance.visible = true;
+        } else {
+            this._menuUsageCreditsBalance.visible = false;
+        }
     }
 
     _renderEmpty(msg = 'Sin datos') {
@@ -282,6 +316,8 @@ class ClaudeIndicator extends PanelMenu.Button {
         this._menuReset.label.set_text('  Comando: claude-usage set 75');
         this._menuCredits.visible = false;
         this._creditsPanelLabel.visible = false;
+        this._menuUsageCreditsBalance.visible = false;
+        this._usageCreditsPanelLabel.visible = false;
     }
 
     // ── Limpieza ──────────────────────────────────────────────────────────
