@@ -17,6 +17,11 @@ Primer uso (una sola vez):
       pide, espera a ver "Current balance" bajo "Usage credits", y presiona
       Enter de nuevo.
 
+    Si ya tienes uno de los dos guardado (p.ej. el Dashboard del Console) y
+    solo falta el otro, usa:
+      claude-usage-credits-poller --login-usage-credits   # solo claude.ai
+      claude-usage-credits-poller --login-dashboard        # solo el Console
+
 Uso normal (automático, sin ventana visible):
     claude-usage-credits-poller             # una consulta
     claude-usage-credits-poller --watch      # bucle cada --interval segundos
@@ -138,10 +143,7 @@ def save_credits(amount: float | None = None, balance: float | None = None):
     USAGE_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False))
 
 
-def cmd_login():
-    pw, context = _open_context(headless=False)
-    page = context.pages[0] if context.pages else context.new_page()
-
+def _login_dashboard(page) -> float | None:
     page.goto(DASHBOARD_URL)
     log("Inicia sesión en la ventana del navegador que se abrió.", Y)
     log("Cuando veas el Dashboard con la tarjeta 'Organization credits',", Y)
@@ -155,9 +157,12 @@ def cmd_login():
         log(f"✓ Organization credits: ${credits:.2f}", G)
     else:
         log("No se pudo detectar 'Organization credits' todavía.", R)
+    return credits
 
+
+def _login_usage_credits(page) -> float | None:
     page.goto(USAGE_CREDITS_URL)
-    log("Ahora inicia sesión en claude.ai si te lo pide.", Y)
+    log("Inicia sesión en claude.ai en la ventana que se abrió (si te lo pide).", Y)
     log("Cuando veas 'Current balance' bajo 'Usage credits', vuelve aquí y presiona Enter.", Y)
     try:
         input()
@@ -169,13 +174,34 @@ def cmd_login():
     else:
         log("No se pudo detectar 'Current balance' todavía.", R)
         log("Verifica que la sección 'Usage credits' esté activada y visible.", Y)
+    return balance
+
+
+def cmd_login(only: str | None = None):
+    pw, context = _open_context(headless=False)
+    page = context.pages[0] if context.pages else context.new_page()
+
+    credits = None
+    balance = None
+
+    if only != "usage-credits":
+        credits = _login_dashboard(page)
+    if only != "dashboard":
+        balance = _login_usage_credits(page)
 
     if credits is not None or balance is not None:
         save_credits(credits, balance)
 
     context.close()
     pw.stop()
-    sys.exit(0 if (credits is not None and balance is not None) else 1)
+
+    if only == "usage-credits":
+        ok = balance is not None
+    elif only == "dashboard":
+        ok = credits is not None
+    else:
+        ok = credits is not None and balance is not None
+    sys.exit(0 if ok else 1)
 
 
 def run_once(headless: bool) -> bool:
@@ -219,7 +245,14 @@ def run_once(headless: bool) -> bool:
 def main():
     p = argparse.ArgumentParser(prog="claude-usage-credits-poller")
     p.add_argument("--login",    action="store_true",
-                    help="Abre el navegador visible para iniciar sesión (una sola vez)")
+                    help="Abre el navegador visible para iniciar sesión en el Dashboard (Console) "
+                         "y luego en claude.ai (Usage credits)")
+    p.add_argument("--login-usage-credits", action="store_true",
+                    help="Igual que --login pero solo para claude.ai / Usage credits "
+                         "(omite el Dashboard del Console)")
+    p.add_argument("--login-dashboard", action="store_true",
+                    help="Igual que --login pero solo para el Dashboard del Console "
+                         "(omite claude.ai / Usage credits)")
     p.add_argument("--watch",    action="store_true", help="Bucle cada --interval segundos")
     p.add_argument("--interval", type=int, default=900,
                     help="Segundos entre consultas en modo --watch (default: 900 = 15 min)")
@@ -227,6 +260,12 @@ def main():
                     help="Corre con navegador visible (útil para depurar el scraping)")
     args = p.parse_args()
 
+    if args.login_usage_credits:
+        cmd_login(only="usage-credits")
+        return
+    if args.login_dashboard:
+        cmd_login(only="dashboard")
+        return
     if args.login:
         cmd_login()
         return
