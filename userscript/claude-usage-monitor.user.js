@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Claude Usage Monitor
 // @namespace    https://github.com/cnavarro/claude-usage-gnome
-// @version      1.2
-// @description  Lee el uso de mensajes de Claude.ai y lo envía al servidor local para mostrarlo en GNOME Shell
+// @version      1.3
+// @description  Lee el uso de mensajes y el saldo de Usage credits de Claude.ai y los envía al servidor local para mostrarlos en GNOME Shell
 // @author       Christian Navarro
 // @match        https://claude.ai/*
 // @grant        GM_xmlhttpRequest
@@ -84,6 +84,16 @@
         return null;
     }
 
+    // "Usage credits" (settings/usage): el monto aparece ANTES de la etiqueta,
+    // ej. "$7.57 \n Current balance". Es independiente del % de uso: se manda
+    // como campo aparte cuando aparece, sin pisar el resto del payload.
+    function tryUsageCreditsBalance() {
+        const text = document.body.innerText || '';
+        const m = text.match(/\$([\d,]+\.\d{2})[\s\S]{0,50}?Current balance/i);
+        if (!m) return null;
+        return parseFloat(m[1].replace(/,/g, ''));
+    }
+
     function detectModel() {
         const sels = [
             '[data-testid="model-selector-dropdown"] [data-testid="model-name"]',
@@ -123,8 +133,14 @@
     }
 
     function checkAndSend(trigger) {
-        const usage = extractUsage();
-        if (usage) sendToServer(usage, trigger);
+        const usage   = extractUsage();
+        const balance = tryUsageCreditsBalance();
+
+        const payload = {};
+        if (usage) Object.assign(payload, usage);
+        if (balance !== null) payload.usage_credits_balance_usd = balance;
+
+        if (Object.keys(payload).length > 0) sendToServer(payload, trigger);
         else dbg('check', `sin datos (${trigger})`);
     }
 

@@ -1,26 +1,14 @@
 #!/usr/bin/env python3
 """
-claude-usage-credits-poller — Obtiene automáticamente dos saldos que no tienen
-API pública, usando un navegador Chromium controlado por Playwright con sesión
-persistente:
-
-  1. "Organization credits" del Dashboard del Console (platform.claude.com) →
-     api_credits_usd
-  2. "Current balance" de Usage credits en claude.ai (settings/usage) →
-     usage_credits_balance_usd
+claude-usage-credits-poller — Obtiene automáticamente el saldo de créditos de la
+API de Anthropic desde el Dashboard del Console (no hay API pública para esto),
+usando un navegador Chromium controlado por Playwright con sesión persistente.
 
 Primer uso (una sola vez):
     claude-usage-credits-poller --login
-    → Se abre un navegador visible. Inicia sesión en el Dashboard del Console
-      y espera a ver la tarjeta "Organization credits"; presiona Enter en la
-      terminal. Luego se navega a claude.ai — inicia sesión ahí también si se
-      pide, espera a ver "Current balance" bajo "Usage credits", y presiona
-      Enter de nuevo.
-
-    Si ya tienes uno de los dos guardado (p.ej. el Dashboard del Console) y
-    solo falta el otro, usa:
-      claude-usage-credits-poller --login-usage-credits   # solo claude.ai
-      claude-usage-credits-poller --login-dashboard        # solo el Console
+    → Se abre un navegador visible. Inicia sesión normalmente y espera a ver
+      el Dashboard con la tarjeta "Organization credits". Vuelve a la terminal
+      y presiona Enter.
 
 Uso normal (automático, sin ventana visible):
     claude-usage-credits-poller             # una consulta
@@ -29,6 +17,12 @@ Uso normal (automático, sin ventana visible):
 La sesión (cookies) queda guardada en un perfil de Chromium dedicado en:
     ~/.local/share/claude-usage/browser-profile
 Esto no toca tu navegador normal ni tus otras cuentas.
+
+Nota: el saldo de "Usage credits" (Current balance) de claude.ai NO se obtiene
+aquí — esa página está protegida por Cloudflare y rechaza cualquier navegador
+automatizado. Ese dato lo captura el userscript del navegador normal del
+usuario (ver userscript/claude-usage-monitor.user.js) y lo envía a
+claude-usage-server.
 """
 
 import argparse
@@ -39,11 +33,10 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-DASHBOARD_URL     = "https://platform.claude.com/dashboard"
-USAGE_CREDITS_URL = "https://claude.ai/projects#settings/usage"
-USAGE_DIR         = Path.home() / ".local" / "share" / "claude-usage"
-USAGE_FILE        = USAGE_DIR / "usage.json"
-PROFILE_DIR       = USAGE_DIR / "browser-profile"
+DASHBOARD_URL = "https://platform.claude.com/dashboard"
+USAGE_DIR     = Path.home() / ".local" / "share" / "claude-usage"
+USAGE_FILE    = USAGE_DIR / "usage.json"
+PROFILE_DIR   = USAGE_DIR / "browser-profile"
 
 G = "\033[92m"; Y = "\033[93m"; R = "\033[91m"
 B = "\033[2m";  NC = "\033[0m"; BOLD = "\033[1m"
@@ -56,10 +49,6 @@ def log(msg, col=""): print(f"{B}[{ts()}]{NC} {col}{msg}{NC}")
 # en el texto visible de la página (independiente de la estructura exacta del DOM).
 CREDIT_RE = re.compile(r"Organization credits.{0,200}?\$([\d,]+\.\d{2})",
                         re.IGNORECASE | re.DOTALL)
-
-# En claude.ai el monto aparece ANTES de la etiqueta: "$7.57 \n Current balance".
-USAGE_BALANCE_RE = re.compile(r"\$([\d,]+\.\d{2}).{0,50}?Current balance",
-                               re.IGNORECASE | re.DOTALL)
 
 
 def _get_playwright():
@@ -91,81 +80,6 @@ def _open_context(headless: bool):
     return pw, context
 
 
-def _harvest_real_browser_cookies(domain: str = "claude.ai") -> list:
-    """
-    Lee las cookies de Firefox del perfil real del usuario — una sesión ya
-    autenticada y verificada por Cloudflare — para inyectarlas en el contexto
-    de Playwright. Así el navegador automatizado no arranca "en blanco" (lo
-    que dispara el chequeo anti-bot), sino que continúa una sesión humana ya
-    aprobada. Solo Firefox por ahora (cookies sin cifrar, lectura directa).
-    """
-    import glob, os, sqlite3, shutil, tempfile
-
-    patterns = [
-        "~/.mozilla/firefox/*/cookies.sqlite",
-        "~/.config/mozilla/firefox/*/cookies.sqlite",                         # Fedora
-        "~/.var/app/org.mozilla.firefox/.mozilla/firefox/*/cookies.sqlite",   # Flatpak
-        "~/snap/firefox/common/.mozilla/firefox/*/cookies.sqlite",            # Snap
-    ]
-    db_paths = []
-    for p in patterns:
-        db_paths.extend(glob.glob(os.path.expanduser(p)))
-
-    cookies = []
-    for db_path in db_paths:
-        tmp = None
-        try:
-            fd, tmp = tempfile.mkstemp(suffix=".sqlite")
-            os.close(fd)
-            shutil.copy2(db_path, tmp)
-            conn = sqlite3.connect(tmp)
-            cur = conn.cursor()
-            cur.execute("""
-                SELECT name, value, host, path, expiry, isSecure, isHttpOnly
-                FROM   moz_cookies
-                WHERE  host LIKE ?
-                ORDER  BY lastAccessed DESC
-            """, (f"%{domain}%",))
-            for name, value, host, path, expiry, is_secure, is_httponly in cur.fetchall():
-                cookies.append({
-                    "name"    : name,
-                    "value"   : value,
-                    "domain"  : host,
-                    "path"    : path or "/",
-                    "expires" : float(expiry) if expiry else -1,
-                    "secure"  : bool(is_secure),
-                    "httpOnly": bool(is_httponly),
-                    "sameSite": "Lax",
-                })
-            conn.close()
-        except Exception as e:
-            log(f"No se pudieron leer cookies de Firefox: {e}", Y)
-        finally:
-            if tmp and os.path.exists(tmp):
-                os.unlink(tmp)
-
-    seen, unique = set(), []
-    for c in cookies:
-        if c["name"] not in seen:
-            seen.add(c["name"])
-            unique.append(c)
-    return unique
-
-
-def _inject_real_cookies(context, domain: str = "claude.ai") -> bool:
-    cookies = _harvest_real_browser_cookies(domain)
-    if not cookies:
-        log(f"No se encontraron cookies reales de {domain} (solo se soporta Firefox).", Y)
-        return False
-    try:
-        context.add_cookies(cookies)
-        log(f"Cookies reales inyectadas ({len(cookies)}) desde Firefox.", B)
-        return True
-    except Exception as e:
-        log(f"No se pudieron inyectar cookies reales: {e}", Y)
-        return False
-
-
 def extract_credits(page) -> float | None:
     try:
         page.wait_for_load_state("networkidle", timeout=15000)
@@ -182,23 +96,7 @@ def extract_credits(page) -> float | None:
     return float(m.group(1).replace(",", ""))
 
 
-def extract_usage_credits_balance(page) -> float | None:
-    try:
-        page.wait_for_load_state("networkidle", timeout=15000)
-    except Exception:
-        pass
-    try:
-        page.wait_for_selector("text=Current balance", timeout=10000)
-    except Exception:
-        pass
-    text = page.inner_text("body")
-    m = USAGE_BALANCE_RE.search(text)
-    if not m:
-        return None
-    return float(m.group(1).replace(",", ""))
-
-
-def save_credits(amount: float | None = None, balance: float | None = None):
+def save_credits(amount: float):
     USAGE_DIR.mkdir(parents=True, exist_ok=True)
     data = {}
     if USAGE_FILE.exists():
@@ -206,19 +104,15 @@ def save_credits(amount: float | None = None, balance: float | None = None):
             data = json.loads(USAGE_FILE.read_text())
         except Exception:
             pass
-    now = datetime.now().strftime("%H:%M  %d/%m/%Y")
-    if amount is not None:
-        data["api_credits_usd"]        = round(amount, 2)
-        data["api_credits_updated_at"] = now
-        data["api_credits_source"]     = "console-poller"
-    if balance is not None:
-        data["usage_credits_balance_usd"]         = round(balance, 2)
-        data["usage_credits_balance_updated_at"]  = now
-        data["usage_credits_balance_source"]      = "claude-ai-poller"
+    data["api_credits_usd"]        = round(amount, 2)
+    data["api_credits_updated_at"] = datetime.now().strftime("%H:%M  %d/%m/%Y")
+    data["api_credits_source"]     = "console-poller"
     USAGE_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False))
 
 
-def _login_dashboard(page) -> float | None:
+def cmd_login():
+    pw, context = _open_context(headless=False)
+    page = context.pages[0] if context.pages else context.new_page()
     page.goto(DASHBOARD_URL)
     log("Inicia sesión en la ventana del navegador que se abrió.", Y)
     log("Cuando veas el Dashboard con la tarjeta 'Organization credits',", Y)
@@ -227,63 +121,18 @@ def _login_dashboard(page) -> float | None:
         input()
     except (EOFError, KeyboardInterrupt):
         pass
+
     credits = extract_credits(page)
     if credits is not None:
-        log(f"✓ Organization credits: ${credits:.2f}", G)
+        save_credits(credits)
+        log(f"✓ Saldo detectado y guardado: ${credits:.2f}", G)
     else:
-        log("No se pudo detectar 'Organization credits' todavía.", R)
-    return credits
-
-
-def _login_usage_credits(page, context) -> float | None:
-    _inject_real_cookies(context, "claude.ai")
-    page.goto(USAGE_CREDITS_URL)
-    balance = extract_usage_credits_balance(page)
-    if balance is not None:
-        log(f"✓ Usage credits — Current balance: ${balance:.2f} (cookies reales, sin login manual)", G)
-        return balance
-
-    log("No se detectó el saldo automáticamente con las cookies reales.", Y)
-    log("Inicia sesión en claude.ai en la ventana que se abrió (si te lo pide).", Y)
-    log("Cuando veas 'Current balance' bajo 'Usage credits', vuelve aquí y presiona Enter.", Y)
-    try:
-        input()
-    except (EOFError, KeyboardInterrupt):
-        pass
-    balance = extract_usage_credits_balance(page)
-    if balance is not None:
-        log(f"✓ Usage credits — Current balance: ${balance:.2f}", G)
-    else:
-        log("No se pudo detectar 'Current balance' todavía.", R)
-        log("Verifica que la sección 'Usage credits' esté activada y visible.", Y)
-    return balance
-
-
-def cmd_login(only: str | None = None):
-    pw, context = _open_context(headless=False)
-    page = context.pages[0] if context.pages else context.new_page()
-
-    credits = None
-    balance = None
-
-    if only != "usage-credits":
-        credits = _login_dashboard(page)
-    if only != "dashboard":
-        balance = _login_usage_credits(page, context)
-
-    if credits is not None or balance is not None:
-        save_credits(credits, balance)
+        log("No se pudo detectar el saldo todavía.", R)
+        log("Verifica que la página muestre la tarjeta 'Organization credits' y reintenta.", Y)
 
     context.close()
     pw.stop()
-
-    if only == "usage-credits":
-        ok = balance is not None
-    elif only == "dashboard":
-        ok = credits is not None
-    else:
-        ok = credits is not None and balance is not None
-    sys.exit(0 if ok else 1)
+    sys.exit(0 if credits is not None else 1)
 
 
 def run_once(headless: bool) -> bool:
@@ -291,51 +140,29 @@ def run_once(headless: bool) -> bool:
     page = context.pages[0] if context.pages else context.new_page()
 
     credits = None
-    balance = None
     try:
         page.goto(DASHBOARD_URL, timeout=30000)
         credits = extract_credits(page)
     except Exception as e:
         log(f"Error al cargar el Dashboard: {e}", R)
+    finally:
+        context.close()
+        pw.stop()
 
-    try:
-        _inject_real_cookies(context, "claude.ai")
-        page.goto(USAGE_CREDITS_URL, timeout=30000)
-        balance = extract_usage_credits_balance(page)
-    except Exception as e:
-        log(f"Error al cargar claude.ai/settings/usage: {e}", R)
-
-    context.close()
-    pw.stop()
-
-    if credits is None and balance is None:
-        log("No se pudo leer ningún saldo.", R)
+    if credits is None:
+        log("No se pudo leer el saldo.", R)
         log("Si la sesión expiró, vuelve a correr: claude-usage-credits-poller --login", Y)
         return False
 
-    save_credits(credits, balance)
-    if credits is not None:
-        log(f"✓ Organization credits: ${credits:.2f}", G)
-    else:
-        log("⚠ No se pudo leer Organization credits.", Y)
-    if balance is not None:
-        log(f"✓ Usage credits (Current balance): ${balance:.2f}", G)
-    else:
-        log("⚠ No se pudo leer Current balance de Usage credits.", Y)
+    save_credits(credits)
+    log(f"✓ Créditos: ${credits:.2f}", G)
     return True
 
 
 def main():
     p = argparse.ArgumentParser(prog="claude-usage-credits-poller")
     p.add_argument("--login",    action="store_true",
-                    help="Abre el navegador visible para iniciar sesión en el Dashboard (Console) "
-                         "y luego en claude.ai (Usage credits)")
-    p.add_argument("--login-usage-credits", action="store_true",
-                    help="Igual que --login pero solo para claude.ai / Usage credits "
-                         "(omite el Dashboard del Console)")
-    p.add_argument("--login-dashboard", action="store_true",
-                    help="Igual que --login pero solo para el Dashboard del Console "
-                         "(omite claude.ai / Usage credits)")
+                    help="Abre el navegador visible para iniciar sesión (una sola vez)")
     p.add_argument("--watch",    action="store_true", help="Bucle cada --interval segundos")
     p.add_argument("--interval", type=int, default=900,
                     help="Segundos entre consultas en modo --watch (default: 900 = 15 min)")
@@ -343,12 +170,6 @@ def main():
                     help="Corre con navegador visible (útil para depurar el scraping)")
     args = p.parse_args()
 
-    if args.login_usage_credits:
-        cmd_login(only="usage-credits")
-        return
-    if args.login_dashboard:
-        cmd_login(only="dashboard")
-        return
     if args.login:
         cmd_login()
         return

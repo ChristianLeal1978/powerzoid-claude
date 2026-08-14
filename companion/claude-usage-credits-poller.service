@@ -1,5 +1,5 @@
 [Unit]
-Description=Claude Usage Credits Poller — consulta créditos de la API (Console) y saldo de Usage credits (claude.ai)
+Description=Claude Usage Credits Poller — consulta el saldo de créditos de la API
 After=network-online.target
 
 [Service]

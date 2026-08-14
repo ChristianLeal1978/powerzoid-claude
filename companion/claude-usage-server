@@ -87,29 +87,47 @@ class UsageHandler(BaseHTTPRequestHandler):
             if not isinstance(data, dict):
                 raise ValueError("Se esperaba un objeto JSON")
 
-            pct = data.get("percentage")
-            if pct is None:
-                raise ValueError("Falta el campo 'percentage'")
+            pct     = data.get("percentage")
+            balance = data.get("usage_credits_balance_usd")
+            if pct is None and balance is None:
+                raise ValueError("Falta 'percentage' o 'usage_credits_balance_usd'")
 
-            # Añadir timestamp de recepción
-            data["updated_at"] = datetime.now().strftime("%H:%M  %d/%m/%Y")
+            now = datetime.now().strftime("%H:%M  %d/%m/%Y")
+            if pct is not None:
+                data["updated_at"] = now
+            if balance is not None:
+                data["usage_credits_balance_updated_at"] = now
+                data["usage_credits_balance_source"]     = "userscript"
 
-            # Escribir a disco
+            # Combinar con lo que ya había en disco: distintos triggers del
+            # userscript mandan campos distintos (% de uso vs. saldo de
+            # créditos) y no deben pisarse entre sí.
             USAGE_DIR.mkdir(parents=True, exist_ok=True)
+            existing = {}
+            if USAGE_FILE.exists():
+                try:
+                    existing = json.loads(USAGE_FILE.read_text())
+                except Exception:
+                    pass
+            merged = {**existing, **data}
+
             USAGE_FILE.write_text(
-                json.dumps(data, indent=2, ensure_ascii=False),
+                json.dumps(merged, indent=2, ensure_ascii=False),
                 encoding="utf-8"
             )
 
             # Log compacto en consola
-            pct_f   = float(pct)
-            col     = R if pct_f >= 90 else Y if pct_f >= 60 else G
-            bar     = pct_bar(pct_f, 15)
-            used    = data.get("used",  "?")
-            limit   = data.get("limit", "?")
-            model   = data.get("model", "Claude")
-            print(f"{D}[{ts()}]{NC} {col}{bar} {pct_f:.0f}%{NC}  "
-                  f"{D}{used}/{limit}  {model}{NC}")
+            if pct is not None:
+                pct_f = float(pct)
+                col   = R if pct_f >= 90 else Y if pct_f >= 60 else G
+                bar   = pct_bar(pct_f, 15)
+                used  = data.get("used",  "?")
+                limit = data.get("limit", "?")
+                model = data.get("model", "Claude")
+                print(f"{D}[{ts()}]{NC} {col}{bar} {pct_f:.0f}%{NC}  "
+                      f"{D}{used}/{limit}  {model}{NC}")
+            if balance is not None:
+                print(f"{D}[{ts()}]{NC} {G}💰 Usage credits: ${float(balance):.2f}{NC}")
 
             # Respuesta OK
             resp = json.dumps({"ok": True}).encode()
