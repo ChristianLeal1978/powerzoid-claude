@@ -51,8 +51,12 @@ BROWSERS = [
         "paths"   : [
             "~/.config/vivaldi/Default/Cookies",
             "~/.config/vivaldi/Profile */Cookies",
+            "~/.var/app/com.vivaldi.Vivaldi/config/vivaldi/Default/Cookies",       # Flatpak
+            "~/.var/app/com.vivaldi.Vivaldi/config/vivaldi/Profile */Cookies",     # Flatpak
         ],
-        "keyring" : "Vivaldi Safe Storage",
+        # Vivaldi nativo usa "Vivaldi Safe Storage"; la versión Flatpak
+        # registra la clave en el keyring bajo el nombre del sandbox portal.
+        "keyring" : ["Vivaldi Safe Storage", "Application key for com.vivaldi.Vivaldi"],
     },
     {
         "name"    : "Chrome",
@@ -151,11 +155,14 @@ def get_firefox_cookies(db_paths: list, domain: str) -> tuple[dict, float]:
 #  LECTURA DE COOKIES — CHROME / VIVALDI / CHROMIUM
 # ══════════════════════════════════════════════════════════════════════════════
 
-def get_chrome_key(keyring_label: str) -> bytes:
+def get_chrome_key(keyring_label) -> bytes:
     """
     Obtiene la clave de cifrado desde GNOME Keyring.
+    Acepta una etiqueta única o una lista de etiquetas candidatas (algunas
+    apps empaquetadas como Flatpak registran la clave con otro nombre).
     Si no está disponible, usa la clave por defecto de Chromium en Linux.
     """
+    labels = [keyring_label] if isinstance(keyring_label, str) else list(keyring_label)
     try:
         import secretstorage
         bus        = secretstorage.dbus_init()
@@ -163,7 +170,7 @@ def get_chrome_key(keyring_label: str) -> bytes:
         if collection.is_locked():
             collection.unlock()
         for item in collection.get_all_items():
-            if item.get_label() == keyring_label:
+            if item.get_label() in labels:
                 return item.get_secret()
     except Exception:
         pass

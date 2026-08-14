@@ -91,6 +91,81 @@ def _open_context(headless: bool):
     return pw, context
 
 
+def _harvest_real_browser_cookies(domain: str = "claude.ai") -> list:
+    """
+    Lee las cookies de Firefox del perfil real del usuario — una sesión ya
+    autenticada y verificada por Cloudflare — para inyectarlas en el contexto
+    de Playwright. Así el navegador automatizado no arranca "en blanco" (lo
+    que dispara el chequeo anti-bot), sino que continúa una sesión humana ya
+    aprobada. Solo Firefox por ahora (cookies sin cifrar, lectura directa).
+    """
+    import glob, os, sqlite3, shutil, tempfile
+
+    patterns = [
+        "~/.mozilla/firefox/*/cookies.sqlite",
+        "~/.config/mozilla/firefox/*/cookies.sqlite",                         # Fedora
+        "~/.var/app/org.mozilla.firefox/.mozilla/firefox/*/cookies.sqlite",   # Flatpak
+        "~/snap/firefox/common/.mozilla/firefox/*/cookies.sqlite",            # Snap
+    ]
+    db_paths = []
+    for p in patterns:
+        db_paths.extend(glob.glob(os.path.expanduser(p)))
+
+    cookies = []
+    for db_path in db_paths:
+        tmp = None
+        try:
+            fd, tmp = tempfile.mkstemp(suffix=".sqlite")
+            os.close(fd)
+            shutil.copy2(db_path, tmp)
+            conn = sqlite3.connect(tmp)
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT name, value, host, path, expiry, isSecure, isHttpOnly
+                FROM   moz_cookies
+                WHERE  host LIKE ?
+                ORDER  BY lastAccessed DESC
+            """, (f"%{domain}%",))
+            for name, value, host, path, expiry, is_secure, is_httponly in cur.fetchall():
+                cookies.append({
+                    "name"    : name,
+                    "value"   : value,
+                    "domain"  : host,
+                    "path"    : path or "/",
+                    "expires" : float(expiry) if expiry else -1,
+                    "secure"  : bool(is_secure),
+                    "httpOnly": bool(is_httponly),
+                    "sameSite": "Lax",
+                })
+            conn.close()
+        except Exception as e:
+            log(f"No se pudieron leer cookies de Firefox: {e}", Y)
+        finally:
+            if tmp and os.path.exists(tmp):
+                os.unlink(tmp)
+
+    seen, unique = set(), []
+    for c in cookies:
+        if c["name"] not in seen:
+            seen.add(c["name"])
+            unique.append(c)
+    return unique
+
+
+def _inject_real_cookies(context, domain: str = "claude.ai") -> bool:
+    cookies = _harvest_real_browser_cookies(domain)
+    if not cookies:
+        log(f"No se encontraron cookies reales de {domain} (solo se soporta Firefox).", Y)
+        return False
+    try:
+        context.add_cookies(cookies)
+        log(f"Cookies reales inyectadas ({len(cookies)}) desde Firefox.", B)
+        return True
+    except Exception as e:
+        log(f"No se pudieron inyectar cookies reales: {e}", Y)
+        return False
+
+
 def extract_credits(page) -> float | None:
     try:
         page.wait_for_load_state("networkidle", timeout=15000)
@@ -160,8 +235,15 @@ def _login_dashboard(page) -> float | None:
     return credits
 
 
-def _login_usage_credits(page) -> float | None:
+def _login_usage_credits(page, context) -> float | None:
+    _inject_real_cookies(context, "claude.ai")
     page.goto(USAGE_CREDITS_URL)
+    balance = extract_usage_credits_balance(page)
+    if balance is not None:
+        log(f"✓ Usage credits — Current balance: ${balance:.2f} (cookies reales, sin login manual)", G)
+        return balance
+
+    log("No se detectó el saldo automáticamente con las cookies reales.", Y)
     log("Inicia sesión en claude.ai en la ventana que se abrió (si te lo pide).", Y)
     log("Cuando veas 'Current balance' bajo 'Usage credits', vuelve aquí y presiona Enter.", Y)
     try:
@@ -187,7 +269,7 @@ def cmd_login(only: str | None = None):
     if only != "usage-credits":
         credits = _login_dashboard(page)
     if only != "dashboard":
-        balance = _login_usage_credits(page)
+        balance = _login_usage_credits(page, context)
 
     if credits is not None or balance is not None:
         save_credits(credits, balance)
@@ -217,6 +299,7 @@ def run_once(headless: bool) -> bool:
         log(f"Error al cargar el Dashboard: {e}", R)
 
     try:
+        _inject_real_cookies(context, "claude.ai")
         page.goto(USAGE_CREDITS_URL, timeout=30000)
         balance = extract_usage_credits_balance(page)
     except Exception as e:
