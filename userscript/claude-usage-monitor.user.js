@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Claude Usage Monitor
 // @namespace    https://github.com/cnavarro/claude-usage-gnome
-// @version      1.3
+// @version      1.3.1
 // @description  Lee el uso de mensajes y el saldo de Usage credits de Claude.ai y los envía al servidor local para mostrarlos en GNOME Shell
 // @author       Christian Navarro
 // @match        https://claude.ai/*
@@ -14,7 +14,7 @@
     'use strict';
 
     const SERVER_URL  = 'http://127.0.0.1:7891/update';
-    const DEBUG       = false;
+    const DEBUG       = true;
 
     // ── Estado ───────────────────────────────────────────────────────────
     let lastPayloadKey  = null;
@@ -214,7 +214,7 @@
     applySendHook();
     checkAndSend('init');
 
-    console.info('[Claude Usage Monitor v1.2] Activo');
+    console.info('[Claude Usage Monitor v1.3] Activo');
     dbg('debug', 'modo debug activado');
 
     function dbg(label, data) {
