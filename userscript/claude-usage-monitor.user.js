@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Claude Usage Monitor
 // @namespace    https://github.com/cnavarro/claude-usage-gnome
-// @version      1.3.1
+// @version      1.3.2
 // @description  Lee el uso de mensajes y el saldo de Usage credits de Claude.ai y los envía al servidor local para mostrarlos en GNOME Shell
 // @author       Christian Navarro
 // @match        https://claude.ai/*
@@ -84,12 +84,13 @@
         return null;
     }
 
-    // "Usage credits" (settings/usage): el monto aparece ANTES de la etiqueta,
-    // ej. "$7.57 \n Current balance". Es independiente del % de uso: se manda
-    // como campo aparte cuando aparece, sin pisar el resto del payload.
+    // "Usage credits" (settings/usage): el monto aparece INMEDIATAMENTE ANTES
+    // de la etiqueta, ej. "$7.57\nCurrent balance". La página también tiene
+    // otro monto más arriba ("$20.00 ... Monthly spend limit"), así que la
+    // ventana de tolerancia debe ser corta para no capturar ese en su lugar.
     function tryUsageCreditsBalance() {
         const text = document.body.innerText || '';
-        const m = text.match(/\$([\d,]+\.\d{2})[\s\S]{0,50}?Current balance/i);
+        const m = text.match(/\$([\d,]+\.\d{2})\s*\n\s*Current balance/i);
         if (!m) return null;
         return parseFloat(m[1].replace(/,/g, ''));
     }
