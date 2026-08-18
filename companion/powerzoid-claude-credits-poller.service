@@ -1,0 +1,9 @@
+[Unit]
+Description=PowerZoid Claude Credits Poller — consulta el saldo de créditos de la API
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/powerzoid-claude-credits-poller
+StandardOutput=journal
+StandardError=journal

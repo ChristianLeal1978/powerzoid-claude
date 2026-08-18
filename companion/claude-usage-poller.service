@@ -1,9 +1,0 @@
-[Unit]
-Description=Claude Usage Poller — consulta claude.ai cada 5 minutos
-After=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=%h/.local/bin/claude-usage-poller
-StandardOutput=journal
-StandardError=journal

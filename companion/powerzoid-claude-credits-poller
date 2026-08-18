@@ -1,28 +1,28 @@
 #!/usr/bin/env python3
 """
-claude-usage-credits-poller — Obtiene automáticamente el saldo de créditos de la
+powerzoid-claude-credits-poller — Obtiene automáticamente el saldo de créditos de la
 API de Anthropic desde el Dashboard del Console (no hay API pública para esto),
 usando un navegador Chromium controlado por Playwright con sesión persistente.
 
 Primer uso (una sola vez):
-    claude-usage-credits-poller --login
+    powerzoid-claude-credits-poller --login
     → Se abre un navegador visible. Inicia sesión normalmente y espera a ver
       el Dashboard con la tarjeta "Organization credits". Vuelve a la terminal
       y presiona Enter.
 
 Uso normal (automático, sin ventana visible):
-    claude-usage-credits-poller             # una consulta
-    claude-usage-credits-poller --watch      # bucle cada --interval segundos
+    powerzoid-claude-credits-poller             # una consulta
+    powerzoid-claude-credits-poller --watch      # bucle cada --interval segundos
 
 La sesión (cookies) queda guardada en un perfil de Chromium dedicado en:
-    ~/.local/share/claude-usage/browser-profile
+    ~/.local/share/powerzoid-claude/browser-profile
 Esto no toca tu navegador normal ni tus otras cuentas.
 
 Nota: el saldo de "Usage credits" (Current balance) de claude.ai NO se obtiene
 aquí — esa página está protegida por Cloudflare y rechaza cualquier navegador
 automatizado. Ese dato lo captura el userscript del navegador normal del
-usuario (ver userscript/claude-usage-monitor.user.js) y lo envía a
-claude-usage-server.
+usuario (ver userscript/powerzoid-claude-monitor.user.js) y lo envía a
+powerzoid-claude-server.
 """
 
 import argparse
@@ -34,7 +34,7 @@ from datetime import datetime
 from pathlib import Path
 
 DASHBOARD_URL = "https://platform.claude.com/dashboard"
-USAGE_DIR     = Path.home() / ".local" / "share" / "claude-usage"
+USAGE_DIR     = Path.home() / ".local" / "share" / "powerzoid-claude"
 USAGE_FILE    = USAGE_DIR / "usage.json"
 PROFILE_DIR   = USAGE_DIR / "browser-profile"
 
@@ -151,7 +151,7 @@ def run_once(headless: bool) -> bool:
 
     if credits is None:
         log("No se pudo leer el saldo.", R)
-        log("Si la sesión expiró, vuelve a correr: claude-usage-credits-poller --login", Y)
+        log("Si la sesión expiró, vuelve a correr: powerzoid-claude-credits-poller --login", Y)
         return False
 
     save_credits(credits)
@@ -160,7 +160,7 @@ def run_once(headless: bool) -> bool:
 
 
 def main():
-    p = argparse.ArgumentParser(prog="claude-usage-credits-poller")
+    p = argparse.ArgumentParser(prog="powerzoid-claude-credits-poller")
     p.add_argument("--login",    action="store_true",
                     help="Abre el navegador visible para iniciar sesión (una sola vez)")
     p.add_argument("--watch",    action="store_true", help="Bucle cada --interval segundos")

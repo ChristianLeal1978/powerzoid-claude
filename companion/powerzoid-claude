@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-claude-usage — CLI compañero para la extensión GNOME "Claude Usage Monitor"
+powerzoid-claude — CLI compañero para la extensión GNOME "PowerZoid Claude"
 
 Uso rápido:
-  claude-usage set 75
-  claude-usage set --used 150 --limit 200 --model "Claude Sonnet 4.5"
-  claude-usage set --used 150 --limit 200 --reset-at "mañana 09:00"
-  claude-usage status
-  claude-usage reset
+  powerzoid-claude set 75
+  powerzoid-claude set --used 150 --limit 200 --model "Claude Sonnet 4.5"
+  powerzoid-claude set --used 150 --limit 200 --reset-at "mañana 09:00"
+  powerzoid-claude status
+  powerzoid-claude reset
 
 El comando escribe en:
-  ~/.local/share/claude-usage/usage.json
+  ~/.local/share/powerzoid-claude/usage.json
 
 La extensión GNOME lee ese archivo automáticamente.
 """
@@ -23,7 +23,7 @@ from datetime import datetime
 from pathlib import Path
 
 # ── Rutas ─────────────────────────────────────────────────────────────────
-USAGE_DIR   = Path.home() / ".local" / "share" / "claude-usage"
+USAGE_DIR   = Path.home() / ".local" / "share" / "powerzoid-claude"
 USAGE_FILE  = USAGE_DIR / "usage.json"
 CONFIG_FILE = USAGE_DIR / "config.json"
 
@@ -97,8 +97,8 @@ def cmd_credits(args):
         credits = data.get("api_credits_usd")
         if credits is None:
             print(f"{YELLOW}Sin créditos registrados.{RESET}")
-            print(f"Usa:  {BOLD}claude-usage credits 42.50{RESET}")
-            print(f"  o:  {BOLD}claude-usage credits 42.50 --total 100{RESET}")
+            print(f"Usa:  {BOLD}powerzoid-claude credits 42.50{RESET}")
+            print(f"  o:  {BOLD}powerzoid-claude credits 42.50 --total 100{RESET}")
             return
         _print_credits(data)
         return
@@ -137,7 +137,7 @@ def _print_credits(data: dict):
 def cmd_set(args):
     data = load_usage()
 
-    # Modo rápido: claude-usage set 75
+    # Modo rápido: powerzoid-claude set 75
     if args.percentage is not None:
         pct = max(0.0, min(100.0, float(args.percentage)))
         data["percentage"] = round(pct, 1)
@@ -167,8 +167,8 @@ def cmd_status(_args):
     data = load_usage()
     if not data:
         print(f"{YELLOW}Sin datos aún.{RESET}")
-        print(f"Usa:  {BOLD}claude-usage set 75{RESET}")
-        print(f"  o:  {BOLD}claude-usage set --used 150 --limit 200{RESET}")
+        print(f"Usa:  {BOLD}powerzoid-claude set 75{RESET}")
+        print(f"  o:  {BOLD}powerzoid-claude set --used 150 --limit 200{RESET}")
         return
     _print_status(data)
 
@@ -255,18 +255,18 @@ def cmd_fetch(_args):
     """
     Intenta obtener el uso desde la API de Anthropic.
     Requiere ANTHROPIC_API_KEY o que hayas ejecutado:
-        claude-usage config --api-key sk-ant-...
+        powerzoid-claude config --api-key sk-ant-...
 
     NOTA: La API de Anthropic expone uso de tokens/mensajes de la API,
     no los límites de sesión de Claude.ai. Para uso de claude.ai
-    actualiza manualmente con 'claude-usage set'.
+    actualiza manualmente con 'powerzoid-claude set'.
     """
     api_key = os.environ.get("ANTHROPIC_API_KEY") or load_config().get("api_key")
 
     if not api_key:
         print(f"{RED}Error:{RESET} No hay API key configurada.")
         print(f"  Opción 1: export ANTHROPIC_API_KEY=sk-ant-...")
-        print(f"  Opción 2: claude-usage config --api-key sk-ant-...")
+        print(f"  Opción 2: powerzoid-claude config --api-key sk-ant-...")
         sys.exit(1)
 
     import urllib.request
@@ -299,26 +299,26 @@ def cmd_fetch(_args):
     print()
     print(f"{YELLOW}⚠ La API de Anthropic no expone límites de sesión de Claude.ai.{RESET}")
     print(f"Actualiza tu uso manualmente:")
-    print(f"  {BOLD}claude-usage set --used 150 --limit 200{RESET}")
+    print(f"  {BOLD}powerzoid-claude set --used 150 --limit 200{RESET}")
 
 
 # ── Parser principal ──────────────────────────────────────────────────────
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="claude-usage",
+        prog="powerzoid-claude",
         description="Gestiona el porcentaje de uso de Claude para la extensión GNOME.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Ejemplos:
-  claude-usage set 75
-  claude-usage set --used 150 --limit 200 --model "Claude Sonnet 4.5"
-  claude-usage set --used 190 --limit 200 --reset-at "mañana 09:00"
-  claude-usage status
-  claude-usage reset --reset-at "09:00 del 09/06/2026"
-  claude-usage config --api-key sk-ant-...
-  claude-usage fetch
-  claude-usage credits 42.50
-  claude-usage credits 42.50 --total 100
+  powerzoid-claude set 75
+  powerzoid-claude set --used 150 --limit 200 --model "Claude Sonnet 4.5"
+  powerzoid-claude set --used 190 --limit 200 --reset-at "mañana 09:00"
+  powerzoid-claude status
+  powerzoid-claude reset --reset-at "09:00 del 09/06/2026"
+  powerzoid-claude config --api-key sk-ant-...
+  powerzoid-claude fetch
+  powerzoid-claude credits 42.50
+  powerzoid-claude credits 42.50 --total 100
         """,
     )
     sub = p.add_subparsers(dest="command", metavar="<comando>")
@@ -326,7 +326,7 @@ Ejemplos:
     # set
     ps = sub.add_parser("set", help="Establece el uso actual")
     ps.add_argument("percentage", type=float, nargs="?",
-                    help="Porcentaje directo (0-100), e.g.: claude-usage set 75")
+                    help="Porcentaje directo (0-100), e.g.: powerzoid-claude set 75")
     ps.add_argument("--used",     type=int,   metavar="N",   help="Mensajes usados")
     ps.add_argument("--limit",    type=int,   metavar="N",   help="Límite total de mensajes")
     ps.add_argument("--model",    type=str,   metavar="STR", help='Nombre del modelo, e.g. "Claude Sonnet 4.5"')
@@ -354,7 +354,7 @@ Ejemplos:
     # credits
     pcr = sub.add_parser("credits", help="Establece los créditos de API restantes (manual)")
     pcr.add_argument("amount", type=float, nargs="?",
-                      help="Créditos restantes en USD, e.g.: claude-usage credits 42.50")
+                      help="Créditos restantes en USD, e.g.: powerzoid-claude credits 42.50")
     pcr.add_argument("--total", type=float, metavar="USD",
                       help="Créditos totales comprados/asignados, para mostrar la barra de progreso")
 

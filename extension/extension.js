@@ -1,9 +1,9 @@
 /**
- * Claude Usage Monitor — extension.js
+ * PowerZoid Claude — extension.js
  * Compatible con GNOME Shell 45-48 (Fedora 42-44)
  *
  * Lee el porcentaje de uso desde:
- *   ~/.local/share/claude-usage/usage.json
+ *   ~/.local/share/powerzoid-claude/usage.json
  *
  * Formato esperado del JSON:
  *   {
@@ -31,7 +31,7 @@ import * as PopupMenu   from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import * as Main        from 'resource:///org/gnome/shell/ui/main.js';
 
 // ── Configuración ──────────────────────────────────────────────────────────
-const USAGE_FILE_PARTS  = ['.local', 'share', 'claude-usage', 'usage.json'];
+const USAGE_FILE_PARTS  = ['.local', 'share', 'powerzoid-claude', 'usage.json'];
 const REFRESH_SECONDS   = 30;   // intervalo de refresco por timer
 const ICON_NEUTRAL      = '⬡';  // hexágono (logo Anthropic)
 const ICON_LOW          = '🟢';
@@ -63,7 +63,7 @@ const ClaudeIndicator = GObject.registerClass(
 class ClaudeIndicator extends PanelMenu.Button {
 
     _init() {
-        super._init(0.0, 'Claude Usage Monitor');
+        super._init(0.0, 'PowerZoid Claude');
 
         // ── Widget en la barra superior ──
         const box = new St.BoxLayout({ style_class: 'panel-status-menu-box' });
@@ -71,26 +71,26 @@ class ClaudeIndicator extends PanelMenu.Button {
         this._creditsPanelLabel = new St.Label({
             text: '',
             y_align: Clutter.ActorAlign.CENTER,
-            style_class: 'claude-usage-credits-panel',
+            style_class: 'powerzoid-claude-credits-panel',
         });
         this._creditsPanelLabel.visible = false;
 
         this._iconLabel = new St.Label({
             text: ICON_NEUTRAL,
             y_align: Clutter.ActorAlign.CENTER,
-            style_class: 'claude-usage-icon',
+            style_class: 'powerzoid-claude-icon',
         });
 
         this._pctLabel = new St.Label({
             text: ' ─ ─',
             y_align: Clutter.ActorAlign.CENTER,
-            style_class: 'claude-usage-pct',
+            style_class: 'powerzoid-claude-pct',
         });
 
         this._usageCreditsPanelLabel = new St.Label({
             text: '',
             y_align: Clutter.ActorAlign.CENTER,
-            style_class: 'claude-usage-credits-panel',
+            style_class: 'powerzoid-claude-credits-panel',
         });
         this._usageCreditsPanelLabel.visible = false;
 
@@ -114,12 +114,12 @@ class ClaudeIndicator extends PanelMenu.Button {
     _buildMenu() {
         // Nombre del modelo
         this._menuModel = new PopupMenu.PopupMenuItem('  Claude', { reactive: false });
-        this._menuModel.label.style_class = 'claude-menu-model';
+        this._menuModel.label.style_class = 'powerzoid-claude-menu-model';
         this.menu.addMenuItem(this._menuModel);
 
         // Barra de progreso (texto Unicode)
         this._menuBar = new PopupMenu.PopupMenuItem('', { reactive: false });
-        this._menuBar.label.style_class = 'claude-menu-bar';
+        this._menuBar.label.style_class = 'powerzoid-claude-menu-bar';
         this.menu.addMenuItem(this._menuBar);
 
         // Línea de mensajes usados / límite
@@ -161,7 +161,7 @@ class ClaudeIndicator extends PanelMenu.Button {
         helpItem.connect('activate', () => {
             try {
                 Gio.AppInfo.launch_default_for_uri(
-                    'https://github.com/cnavarro/claude-usage-gnome#uso', null
+                    'https://github.com/ChristianLeal1978/powerzoid-claude#uso', null
                 );
             } catch (e) { /* ignorar */ }
         });
@@ -183,7 +183,7 @@ class ClaudeIndicator extends PanelMenu.Button {
                 }
             });
         } catch (e) {
-            log(`[Claude Usage] Monitor de archivo: ${e.message}`);
+            log(`[PowerZoid Claude] Monitor de archivo: ${e.message}`);
         }
     }
 
@@ -222,7 +222,7 @@ class ClaudeIndicator extends PanelMenu.Button {
             const file = Gio.File.new_for_path(usageFilePath());
 
             if (!file.query_exists(null)) {
-                this._renderEmpty('Sin datos · ejecuta: claude-usage set <n>');
+                this._renderEmpty('Sin datos · ejecuta: powerzoid-claude set <n>');
                 return;
             }
 
@@ -233,7 +233,7 @@ class ClaudeIndicator extends PanelMenu.Button {
             this._renderData(data);
 
         } catch (e) {
-            log(`[Claude Usage] Error al refrescar: ${e.message}`);
+            log(`[PowerZoid Claude] Error al refrescar: ${e.message}`);
             this._renderEmpty(`Error: ${e.message}`);
         }
     }
@@ -310,10 +310,10 @@ class ClaudeIndicator extends PanelMenu.Button {
     _renderEmpty(msg = 'Sin datos') {
         this._iconLabel.set_text(ICON_NEUTRAL);
         this._pctLabel.set_text(' ─ ─');
-        this._menuModel.label.set_text('  Claude Usage Monitor');
+        this._menuModel.label.set_text('  PowerZoid Claude');
         this._menuBar.label.set_text(`  ${msg}`);
         this._menuStats.label.set_text('');
-        this._menuReset.label.set_text('  Comando: claude-usage set 75');
+        this._menuReset.label.set_text('  Comando: powerzoid-claude set 75');
         this._menuCredits.visible = false;
         this._creditsPanelLabel.visible = false;
         this._menuUsageCreditsBalance.visible = false;
@@ -335,7 +335,7 @@ class ClaudeIndicator extends PanelMenu.Button {
 });
 
 // ── Clase principal de la extensión ───────────────────────────────────────
-export default class ClaudeUsageExtension extends Extension {
+export default class PowerZoidClaudeExtension extends Extension {
     enable() {
         this._indicator = new ClaudeIndicator();
         Main.panel.addToStatusArea(this.uuid, this._indicator);

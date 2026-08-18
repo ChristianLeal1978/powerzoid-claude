@@ -1,19 +1,19 @@
 [Unit]
-Description=Claude Usage Monitor — servidor HTTP local
-Documentation=https://github.com/cnavarro/claude-usage-gnome
+Description=PowerZoid Claude — servidor HTTP local
+Documentation=https://github.com/ChristianLeal1978/powerzoid-claude
 # Arrancar después de que la sesión gráfica esté disponible
 After=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/claude-usage-server
+ExecStart=%h/.local/bin/powerzoid-claude-server
 Restart=on-failure
 RestartSec=5
 
 # Restringir el proceso solo a localhost (seguridad)
 Environment="PYTHONUNBUFFERED=1"
 
-# Log al journal del usuario: journalctl --user -u claude-usage-server -f
+# Log al journal del usuario: journalctl --user -u powerzoid-claude-server -f
 StandardOutput=journal
 StandardError=journal
 

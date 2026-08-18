@@ -1,0 +1,10 @@
+[Unit]
+Description=Ejecuta powerzoid-claude-poller cada 60 segundos
+
+[Timer]
+OnBootSec=15sec
+OnUnitActiveSec=60sec
+Unit=powerzoid-claude-poller.service
+
+[Install]
+WantedBy=timers.target

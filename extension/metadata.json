@@ -1,8 +1,8 @@
 {
-  "name": "Claude Usage Monitor",
+  "name": "PowerZoid Claude",
   "description": "Muestra el porcentaje de uso de tu sesión de Claude en la barra superior del sistema.",
-  "uuid": "claude-usage@cnavarro.cl",
+  "uuid": "powerzoid-claude@cleal.cl",
   "shell-version": ["45", "46", "47", "48", "49", "50"],
   "version": 1,
-  "url": "https://github.com/cnavarro/claude-usage-gnome"
+  "url": "https://github.com/ChristianLeal1978/powerzoid-claude"
 }

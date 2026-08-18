@@ -1,0 +1,10 @@
+[Unit]
+Description=Ejecuta powerzoid-claude-credits-poller cada 15 minutos
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+Unit=powerzoid-claude-credits-poller.service
+
+[Install]
+WantedBy=timers.target

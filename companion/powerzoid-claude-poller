@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-claude-usage-poller — Consulta claude.ai leyendo cookies del navegador activo.
+powerzoid-claude-poller — Consulta claude.ai leyendo cookies del navegador activo.
 
 Detecta automáticamente qué navegador tiene Claude abierto
 (Firefox, Chrome, Vivaldi) y usa sus cookies.
 
 Uso:
-    claude-usage-poller           # consulta única
-    claude-usage-poller --watch   # bucle cada 5 minutos
-    claude-usage-poller --debug   # vuelca respuestas de la API
+    powerzoid-claude-poller           # consulta única
+    powerzoid-claude-poller --watch   # bucle cada 5 minutos
+    powerzoid-claude-poller --debug   # vuelca respuestas de la API
 """
 
 import glob, json, os, shutil, sqlite3, subprocess
@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 # ── Rutas y constantes ────────────────────────────────────────────────────────
-USAGE_DIR  = Path.home() / ".local" / "share" / "claude-usage"
+USAGE_DIR  = Path.home() / ".local" / "share" / "powerzoid-claude"
 USAGE_FILE = USAGE_DIR / "usage.json"
 DOMAIN     = "claude.ai"
 
@@ -524,7 +524,7 @@ def debug_dump():
 
 def main():
     import argparse
-    p = argparse.ArgumentParser(prog="claude-usage-poller")
+    p = argparse.ArgumentParser(prog="powerzoid-claude-poller")
     p.add_argument("--watch",    action="store_true", help="Bucle cada N segundos")
     p.add_argument("--interval", type=int, default=300)
     p.add_argument("--debug",    action="store_true", help="Vuelca respuestas API")

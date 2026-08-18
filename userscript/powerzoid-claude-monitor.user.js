@@ -1,6 +1,6 @@
 // ==UserScript==
-// @name         Claude Usage Monitor
-// @namespace    https://github.com/cnavarro/claude-usage-gnome
+// @name         PowerZoid Claude Monitor
+// @namespace    https://github.com/ChristianLeal1978/powerzoid-claude
 // @version      1.3.2
 // @description  Lee el uso de mensajes y el saldo de Usage credits de Claude.ai y los envía al servidor local para mostrarlos en GNOME Shell
 // @author       Christian Navarro
@@ -215,7 +215,7 @@
     applySendHook();
     checkAndSend('init');
 
-    console.info('[Claude Usage Monitor v1.3] Activo');
+    console.info('[PowerZoid Claude v1.3] Activo');
     dbg('debug', 'modo debug activado');
 
     function dbg(label, data) {
