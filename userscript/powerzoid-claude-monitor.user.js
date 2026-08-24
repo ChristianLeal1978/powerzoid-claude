@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PowerZoid Claude Monitor
 // @namespace    https://github.com/ChristianLeal1978/powerzoid-claude
-// @version      1.3.3
+// @version      1.3.4
 // @description  Lee el uso de mensajes y el saldo de Usage credits de Claude.ai y los envía al servidor local para mostrarlos en GNOME Shell
 // @author       Christian Navarro
 // @match        https://claude.ai/*
@@ -13,8 +13,9 @@
 (function () {
     'use strict';
 
-    const SERVER_URL  = 'http://127.0.0.1:7891/update';
-    const DEBUG       = true;
+    const SERVER_URL     = 'http://127.0.0.1:7891/update';
+    const DEBUG          = true;
+    const POLL_INTERVAL_MS = 5 * 60 * 1000; // reintento periódico (además de los eventos)
 
     // ── Estado ───────────────────────────────────────────────────────────
     let lastPayloadKey  = null;
@@ -214,6 +215,12 @@
     // Check inicial
     applySendHook();
     checkAndSend('init');
+
+    // 4. Reintento periódico: el saldo de "Usage credits" solo se lee del DOM
+    //    cuando hay un evento disparador (visibilidad, mutación, envío). Si la
+    //    pestaña de /settings/usage queda abierta y quieta, nunca se refresca.
+    //    Este intervalo garantiza una actualización aunque no pase nada más.
+    setInterval(() => checkAndSend('interval'), POLL_INTERVAL_MS);
 
     console.info('[PowerZoid Claude v1.3] Activo');
     dbg('debug', 'modo debug activado');
