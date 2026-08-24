@@ -58,6 +58,11 @@ function buildProgressBar(pct, width = 20) {
     return '▓'.repeat(filled) + '░'.repeat(width - filled);
 }
 
+function formatUsd(amount) {
+    const n = Number(amount);
+    return n < 0 ? `-$${(-n).toFixed(2)}` : `$${n.toFixed(2)}`;
+}
+
 // ── Indicador ──────────────────────────────────────────────────────────────
 const ClaudeIndicator = GObject.registerClass(
 class ClaudeIndicator extends PanelMenu.Button {
@@ -264,7 +269,7 @@ class ClaudeIndicator extends PanelMenu.Button {
 
         const panelBalance = d.usage_credits_balance_usd;
         if (panelBalance !== undefined && panelBalance !== null) {
-            this._usageCreditsPanelLabel.set_text(` 💰 $${Number(panelBalance).toFixed(2)}`);
+            this._usageCreditsPanelLabel.set_text(` 💰 ${formatUsd(panelBalance)}`);
             this._usageCreditsPanelLabel.visible = true;
         } else {
             this._usageCreditsPanelLabel.visible = false;
@@ -299,7 +304,7 @@ class ClaudeIndicator extends PanelMenu.Button {
         const balance = d.usage_credits_balance_usd;
         if (balance !== undefined && balance !== null) {
             this._menuUsageCreditsBalance.label.set_text(
-                `  💰 Usage credits: $${Number(balance).toFixed(2)}`
+                `  💰 Usage credits: ${formatUsd(balance)}`
             );
             this._menuUsageCreditsBalance.visible = true;
         } else {
