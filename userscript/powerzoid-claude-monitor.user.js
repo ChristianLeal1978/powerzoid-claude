@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PowerZoid Claude Monitor
 // @namespace    https://github.com/ChristianLeal1978/powerzoid-claude
-// @version      1.3.2
+// @version      1.3.3
 // @description  Lee el uso de mensajes y el saldo de Usage credits de Claude.ai y los envía al servidor local para mostrarlos en GNOME Shell
 // @author       Christian Navarro
 // @match        https://claude.ai/*
@@ -90,7 +90,7 @@
     // ventana de tolerancia debe ser corta para no capturar ese en su lugar.
     function tryUsageCreditsBalance() {
         const text = document.body.innerText || '';
-        const m = text.match(/\$([\d,]+\.\d{2})\s*\n\s*Current balance/i);
+        const m = text.match(/\$([\d,]+\.\d{2})\s*\n\s*(?:Current balance|Saldo actual)/i);
         if (!m) return null;
         return parseFloat(m[1].replace(/,/g, ''));
     }

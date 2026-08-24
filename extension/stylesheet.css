@@ -18,8 +18,15 @@
 .powerzoid-claude-credits-panel {
     font-size: 12px;
     font-weight: bold;
-    color: #a6e3a1;   /* verde suave — saldo disponible */
+    color: #a6e3a1;   /* verde suave — créditos de API disponibles */
     margin-right: 4px;
+}
+
+.powerzoid-claude-overuse-panel {
+    font-size: 12px;
+    font-weight: bold;
+    color: #f38ba8;   /* rojo suave — créditos de sobreuso (plan agotado) */
+    margin-left: 4px;
 }
 
 /* ── Elementos del menú desplegable ────────────────────────────────────── */

@@ -90,7 +90,7 @@ class ClaudeIndicator extends PanelMenu.Button {
         this._usageCreditsPanelLabel = new St.Label({
             text: '',
             y_align: Clutter.ActorAlign.CENTER,
-            style_class: 'powerzoid-claude-credits-panel',
+            style_class: 'powerzoid-claude-overuse-panel',
         });
         this._usageCreditsPanelLabel.visible = false;
 
