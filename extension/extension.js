@@ -70,6 +70,18 @@ function formatUsd(amount) {
     return n < 0 ? `-$${(-n).toFixed(2)}` : `$${n.toFixed(2)}`;
 }
 
+// Color según el saldo restante: verde por defecto, amarillo <= $20, rojo <= $10.
+const MONEY_COLOR_OK   = '#a6e3a1';
+const MONEY_COLOR_WARN = '#f9e2af';
+const MONEY_COLOR_LOW  = '#f38ba8';
+
+function moneyColor(amount) {
+    const n = Number(amount);
+    if (n <= 10) return MONEY_COLOR_LOW;
+    if (n <= 20) return MONEY_COLOR_WARN;
+    return MONEY_COLOR_OK;
+}
+
 // ── Indicador ──────────────────────────────────────────────────────────────
 const ClaudeIndicator = GObject.registerClass(
 class ClaudeIndicator extends PanelMenu.Button {
@@ -280,6 +292,7 @@ class ClaudeIndicator extends PanelMenu.Button {
         const panelCredits = d.api_credits_usd;
         if (panelCredits !== undefined && panelCredits !== null) {
             this._creditsPanelLabel.set_text(`💳 $${Number(panelCredits).toFixed(2)} `);
+            this._creditsPanelLabel.set_style(`color: ${moneyColor(panelCredits)};`);
             this._creditsPanelLabel.visible = true;
         } else {
             this._creditsPanelLabel.visible = false;
@@ -288,6 +301,7 @@ class ClaudeIndicator extends PanelMenu.Button {
         const panelBalance = d.usage_credits_balance_usd;
         if (panelBalance !== undefined && panelBalance !== null) {
             this._usageCreditsPanelLabel.set_text(` 💰 ${formatUsd(panelBalance)}`);
+            this._usageCreditsPanelLabel.set_style(`color: ${moneyColor(panelBalance)};`);
             this._usageCreditsPanelLabel.visible = true;
         } else {
             this._usageCreditsPanelLabel.visible = false;
@@ -313,6 +327,7 @@ class ClaudeIndicator extends PanelMenu.Button {
                 ? `  💳 Créditos API: $${Number(credits).toFixed(2)} / $${Number(total).toFixed(2)}`
                 : `  💳 Créditos API: $${Number(credits).toFixed(2)}`;
             this._menuCredits.label.set_text(text);
+            this._menuCredits.label.set_style(`color: ${moneyColor(credits)};`);
             this._menuCredits.visible = true;
         } else {
             this._menuCredits.visible = false;
@@ -324,6 +339,7 @@ class ClaudeIndicator extends PanelMenu.Button {
             this._menuUsageCreditsBalance.label.set_text(
                 `  💰 Usage credits: ${formatUsd(balance)}`
             );
+            this._menuUsageCreditsBalance.label.set_style(`color: ${moneyColor(balance)};`);
             this._menuUsageCreditsBalance.visible = true;
         } else {
             this._menuUsageCreditsBalance.visible = false;
