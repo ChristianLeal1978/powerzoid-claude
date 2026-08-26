@@ -40,7 +40,6 @@ const ICON_MED          = '🟡';
 const ICON_HIGH         = '🔴';
 
 const DESKTOP_UPDATE_SCRIPT_PARTS = ['.local', 'bin', 'update-claude-desktop.sh'];
-const DESKTOP_UPDATE_CHECK_SECONDS = 3600; // 1 vez por hora
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 function usageFilePath() {
@@ -125,12 +124,6 @@ class ClaudeIndicator extends PanelMenu.Button {
         // ── Actualización de Claude Desktop ──
         this._desktopUpdateInfo = null;
         this._desktopUpdateChecking = false;
-        this._desktopUpdateLastCheckMs = 0;
-        this._checkDesktopUpdate();
-        this._startDesktopUpdateTimer();
-        this.menu.connect('open-state-changed', (_menu, open) => {
-            if (open) this._maybeCheckDesktopUpdate();
-        });
     }
 
     // ── Construcción del menú ──────────────────────────────────────────────
@@ -192,9 +185,8 @@ class ClaudeIndicator extends PanelMenu.Button {
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
-        // Botón: Actualización de Claude Desktop
-        this._desktopUpdateItem = new PopupMenu.PopupMenuItem('Claude Desktop: revisando…');
-        this._desktopUpdateItem.setSensitive(false);
+        // Botón: Actualización de Claude Desktop (chequeo manual)
+        this._desktopUpdateItem = new PopupMenu.PopupMenuItem('↻  Revisar versión de Claude Desktop');
         this._desktopUpdateItem.connect('activate', () => this._onDesktopUpdateActivate());
         this.menu.addMenuItem(this._desktopUpdateItem);
     }
@@ -351,20 +343,18 @@ class ClaudeIndicator extends PanelMenu.Button {
         this._usageCreditsPanelLabel.visible = false;
     }
 
-    // ── Actualización de Claude Desktop ───────────────────────────────────
-    _startDesktopUpdateTimer() {
-        this._desktopUpdateTimerId = GLib.timeout_add_seconds(
-            GLib.PRIORITY_DEFAULT,
-            DESKTOP_UPDATE_CHECK_SECONDS,
-            () => { this._checkDesktopUpdate(); return GLib.SOURCE_CONTINUE; }
-        );
-    }
+    // ── Actualización de Claude Desktop (chequeo manual) ──────────────────
+    _onDesktopUpdateActivate() {
+        if (this._desktopUpdateChecking) return;
 
-    _maybeCheckDesktopUpdate() {
-        const elapsedMs = Date.now() - this._desktopUpdateLastCheckMs;
-        if (elapsedMs >= DESKTOP_UPDATE_CHECK_SECONDS * 1000) {
-            this._checkDesktopUpdate();
+        // Si ya sabemos que hay actualización disponible, este clic la dispara.
+        if (this._desktopUpdateInfo?.update_available) {
+            this._launchDesktopUpdateTerminal();
+            return;
         }
+
+        // Si no, este clic dispara (o reintenta) el chequeo de versión.
+        this._checkDesktopUpdate();
     }
 
     _checkDesktopUpdate() {
@@ -377,7 +367,8 @@ class ClaudeIndicator extends PanelMenu.Button {
         }
 
         this._desktopUpdateChecking = true;
-        this._desktopUpdateLastCheckMs = Date.now();
+        this._desktopUpdateItem.label.set_text('↻  Revisando Claude Desktop…');
+        this._desktopUpdateItem.setSensitive(false);
 
         let proc;
         try {
@@ -409,23 +400,17 @@ class ClaudeIndicator extends PanelMenu.Button {
 
     _renderDesktopUpdate(data) {
         if (data.update_available) {
-            this._desktopUpdateItem.label.set_text(`Claude Desktop: actualizar a v${data.latest}`);
-            this._desktopUpdateItem.setSensitive(true);
+            this._desktopUpdateItem.label.set_text(`⬇  Actualizar Claude Desktop a v${data.latest}`);
         } else {
-            this._desktopUpdateItem.label.set_text(`Claude Desktop: al día (v${data.installed})`);
-            this._desktopUpdateItem.setSensitive(false);
+            this._desktopUpdateItem.label.set_text(`✓  Claude Desktop al día (v${data.installed})`);
         }
+        this._desktopUpdateItem.setSensitive(true);
     }
 
     _renderDesktopUpdateError() {
         this._desktopUpdateInfo = null;
-        this._desktopUpdateItem.label.set_text('Claude Desktop: no se pudo verificar');
-        this._desktopUpdateItem.setSensitive(false);
-    }
-
-    _onDesktopUpdateActivate() {
-        if (!this._desktopUpdateInfo?.update_available) return;
-        this._launchDesktopUpdateTerminal();
+        this._desktopUpdateItem.label.set_text('⚠  No se pudo verificar Claude Desktop (reintentar)');
+        this._desktopUpdateItem.setSensitive(true);
     }
 
     _launchDesktopUpdateTerminal() {
@@ -434,11 +419,12 @@ class ClaudeIndicator extends PanelMenu.Button {
             `read -p "Presiona Enter para cerrar..."`;
 
         const bin = GLib.find_program_in_path('gnome-terminal') ??
-            GLib.find_program_in_path('kgx');
+            GLib.find_program_in_path('kgx') ??
+            GLib.find_program_in_path('ptyxis');
 
         if (!bin) {
             this._notifyDesktopUpdateError(
-                'No se encontró un emulador de terminal (gnome-terminal o kgx).'
+                'No se encontró un emulador de terminal (gnome-terminal, kgx o ptyxis).'
             );
             return;
         }
@@ -474,10 +460,6 @@ class ClaudeIndicator extends PanelMenu.Button {
         if (this._timerId) {
             GLib.source_remove(this._timerId);
             this._timerId = null;
-        }
-        if (this._desktopUpdateTimerId) {
-            GLib.source_remove(this._desktopUpdateTimerId);
-            this._desktopUpdateTimerId = null;
         }
         if (this._fileMonitor) {
             this._fileMonitor.cancel();
