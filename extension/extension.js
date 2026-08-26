@@ -29,6 +29,7 @@ import { Extension }    from 'resource:///org/gnome/shell/extensions/extension.j
 import * as PanelMenu   from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu   from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import * as Main        from 'resource:///org/gnome/shell/ui/main.js';
+import * as MessageTray from 'resource:///org/gnome/shell/ui/messageTray.js';
 
 // ── Configuración ──────────────────────────────────────────────────────────
 const USAGE_FILE_PARTS  = ['.local', 'share', 'powerzoid-claude', 'usage.json'];
@@ -38,6 +39,9 @@ const ICON_LOW          = '🟢';
 const ICON_MED          = '🟡';
 const ICON_HIGH         = '🔴';
 
+const DESKTOP_UPDATE_SCRIPT_PARTS = ['.local', 'bin', 'update-claude-desktop.sh'];
+const DESKTOP_UPDATE_CHECK_SECONDS = 3600; // 1 vez por hora
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 function usageFilePath() {
     return GLib.build_filenamev([GLib.get_home_dir(), ...USAGE_FILE_PARTS]);
@@ -45,6 +49,10 @@ function usageFilePath() {
 
 function usageDirPath() {
     return GLib.build_filenamev([GLib.get_home_dir(), ...USAGE_FILE_PARTS.slice(0, -1)]);
+}
+
+function desktopUpdateScriptPath() {
+    return GLib.build_filenamev([GLib.get_home_dir(), ...DESKTOP_UPDATE_SCRIPT_PARTS]);
 }
 
 function pctToIcon(pct) {
@@ -113,6 +121,16 @@ class ClaudeIndicator extends PanelMenu.Button {
         this._refresh();
         this._setupFileMonitor();
         this._startTimer();
+
+        // ── Actualización de Claude Desktop ──
+        this._desktopUpdateInfo = null;
+        this._desktopUpdateChecking = false;
+        this._desktopUpdateLastCheckMs = 0;
+        this._checkDesktopUpdate();
+        this._startDesktopUpdateTimer();
+        this.menu.connect('open-state-changed', (_menu, open) => {
+            if (open) this._maybeCheckDesktopUpdate();
+        });
     }
 
     // ── Construcción del menú ──────────────────────────────────────────────
@@ -171,6 +189,14 @@ class ClaudeIndicator extends PanelMenu.Button {
             } catch (e) { /* ignorar */ }
         });
         this.menu.addMenuItem(helpItem);
+
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+        // Botón: Actualización de Claude Desktop
+        this._desktopUpdateItem = new PopupMenu.PopupMenuItem('Claude Desktop: revisando…');
+        this._desktopUpdateItem.setSensitive(false);
+        this._desktopUpdateItem.connect('activate', () => this._onDesktopUpdateActivate());
+        this.menu.addMenuItem(this._desktopUpdateItem);
     }
 
     // ── Monitoreo de archivo ───────────────────────────────────────────────
@@ -325,11 +351,133 @@ class ClaudeIndicator extends PanelMenu.Button {
         this._usageCreditsPanelLabel.visible = false;
     }
 
+    // ── Actualización de Claude Desktop ───────────────────────────────────
+    _startDesktopUpdateTimer() {
+        this._desktopUpdateTimerId = GLib.timeout_add_seconds(
+            GLib.PRIORITY_DEFAULT,
+            DESKTOP_UPDATE_CHECK_SECONDS,
+            () => { this._checkDesktopUpdate(); return GLib.SOURCE_CONTINUE; }
+        );
+    }
+
+    _maybeCheckDesktopUpdate() {
+        const elapsedMs = Date.now() - this._desktopUpdateLastCheckMs;
+        if (elapsedMs >= DESKTOP_UPDATE_CHECK_SECONDS * 1000) {
+            this._checkDesktopUpdate();
+        }
+    }
+
+    _checkDesktopUpdate() {
+        if (this._desktopUpdateChecking) return;
+
+        const scriptPath = desktopUpdateScriptPath();
+        if (!GLib.file_test(scriptPath, GLib.FileTest.IS_EXECUTABLE)) {
+            this._renderDesktopUpdateError();
+            return;
+        }
+
+        this._desktopUpdateChecking = true;
+        this._desktopUpdateLastCheckMs = Date.now();
+
+        let proc;
+        try {
+            proc = Gio.Subprocess.new(
+                [scriptPath, '--check', '--json'],
+                Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE
+            );
+        } catch (e) {
+            log(`[PowerZoid Claude] No se pudo iniciar la verificación de Claude Desktop: ${e.message}`);
+            this._desktopUpdateChecking = false;
+            this._renderDesktopUpdateError();
+            return;
+        }
+
+        proc.communicate_utf8_async(null, null, (source, res) => {
+            this._desktopUpdateChecking = false;
+            try {
+                const [, stdout] = source.communicate_utf8_finish(res);
+                const data = JSON.parse(stdout.trim());
+                if (data.error) throw new Error(data.error);
+                this._desktopUpdateInfo = data;
+                this._renderDesktopUpdate(data);
+            } catch (e) {
+                log(`[PowerZoid Claude] Error al verificar Claude Desktop: ${e.message}`);
+                this._renderDesktopUpdateError();
+            }
+        });
+    }
+
+    _renderDesktopUpdate(data) {
+        if (data.update_available) {
+            this._desktopUpdateItem.label.set_text(`Claude Desktop: actualizar a v${data.latest}`);
+            this._desktopUpdateItem.setSensitive(true);
+        } else {
+            this._desktopUpdateItem.label.set_text(`Claude Desktop: al día (v${data.installed})`);
+            this._desktopUpdateItem.setSensitive(false);
+        }
+    }
+
+    _renderDesktopUpdateError() {
+        this._desktopUpdateInfo = null;
+        this._desktopUpdateItem.label.set_text('Claude Desktop: no se pudo verificar');
+        this._desktopUpdateItem.setSensitive(false);
+    }
+
+    _onDesktopUpdateActivate() {
+        if (!this._desktopUpdateInfo?.update_available) return;
+        this._launchDesktopUpdateTerminal();
+    }
+
+    _launchDesktopUpdateTerminal() {
+        const scriptPath = desktopUpdateScriptPath();
+        const innerCmd = `${GLib.shell_quote(scriptPath)} --yes; echo; ` +
+            `read -p "Presiona Enter para cerrar..."`;
+
+        const bin = GLib.find_program_in_path('gnome-terminal') ??
+            GLib.find_program_in_path('kgx');
+
+        if (!bin) {
+            this._notifyDesktopUpdateError(
+                'No se encontró un emulador de terminal (gnome-terminal o kgx).'
+            );
+            return;
+        }
+
+        try {
+            Gio.Subprocess.new([bin, '--', 'bash', '-c', innerCmd], Gio.SubprocessFlags.NONE);
+        } catch (e) {
+            log(`[PowerZoid Claude] No se pudo abrir terminal para actualizar: ${e.message}`);
+            this._notifyDesktopUpdateError('No se pudo abrir el emulador de terminal.');
+        }
+    }
+
+    _notifyDesktopUpdateError(msg) {
+        if (!this._notifSource) {
+            this._notifSource = new MessageTray.Source({
+                title: 'PowerZoid Claude',
+                iconName: 'dialog-error-symbolic',
+            });
+            Main.messageTray.add(this._notifSource);
+        }
+
+        const notification = new MessageTray.Notification({
+            source: this._notifSource,
+            title: 'Claude Desktop',
+            body: msg,
+            iconName: 'dialog-error-symbolic',
+        });
+        this._notifSource.addNotification(notification);
+    }
+
     // ── Limpieza ──────────────────────────────────────────────────────────
     destroy() {
         if (this._timerId) {
             GLib.source_remove(this._timerId);
             this._timerId = null;
+        }
+        if (this._desktopUpdateTimerId) {
+            GLib.source_remove(this._desktopUpdateTimerId);
+            this._desktopUpdateTimerId = null;
         }
         if (this._fileMonitor) {
             this._fileMonitor.cancel();
