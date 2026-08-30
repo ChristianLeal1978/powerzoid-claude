@@ -44,8 +44,9 @@ cp "$DIR/companion/powerzoid-claude"                 "$BIN_DIR/powerzoid-claude"
 cp "$DIR/companion/powerzoid-claude-server"          "$BIN_DIR/powerzoid-claude-server"
 cp "$DIR/companion/powerzoid-claude-poller"          "$BIN_DIR/powerzoid-claude-poller"
 cp "$DIR/companion/powerzoid-claude-credits-poller"  "$BIN_DIR/powerzoid-claude-credits-poller"
-chmod +x "$BIN_DIR"/powerzoid-claude*
-ok "powerzoid-claude, powerzoid-claude-server, powerzoid-claude-poller, powerzoid-claude-credits-poller → $BIN_DIR"
+cp "$DIR/companion/update-claude-desktop.sh"         "$BIN_DIR/update-claude-desktop.sh"
+chmod +x "$BIN_DIR"/powerzoid-claude* "$BIN_DIR/update-claude-desktop.sh"
+ok "powerzoid-claude, powerzoid-claude-server, powerzoid-claude-poller, powerzoid-claude-credits-poller, update-claude-desktop.sh → $BIN_DIR"
 
 # PATH
 if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
