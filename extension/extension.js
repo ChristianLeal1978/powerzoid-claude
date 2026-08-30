@@ -41,6 +41,15 @@ const ICON_HIGH         = '🔴';
 
 const DESKTOP_UPDATE_SCRIPT_PARTS = ['.local', 'bin', 'update-claude-desktop.sh'];
 
+const VALID_ALIGNS   = ['left', 'center', 'right'];
+const DEFAULT_FONT_SIZE = 12;
+const MIN_FONT_SIZE     = 8;
+const MAX_FONT_SIZE     = 20;
+
+const CONFIG_DIR_PARTS  = ['.config', 'powerzoid-claude'];
+const POSITION_FILE     = 'panel-position';
+const FONT_SIZE_FILE    = 'font-size';
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 function usageFilePath() {
     return GLib.build_filenamev([GLib.get_home_dir(), ...USAGE_FILE_PARTS]);
@@ -52,6 +61,18 @@ function usageDirPath() {
 
 function desktopUpdateScriptPath() {
     return GLib.build_filenamev([GLib.get_home_dir(), ...DESKTOP_UPDATE_SCRIPT_PARTS]);
+}
+
+function configDirPath() {
+    return GLib.build_filenamev([GLib.get_home_dir(), ...CONFIG_DIR_PARTS]);
+}
+
+function panelPositionPath() {
+    return GLib.build_filenamev([configDirPath(), POSITION_FILE]);
+}
+
+function fontSizePath() {
+    return GLib.build_filenamev([configDirPath(), FONT_SIZE_FILE]);
 }
 
 function pctToIcon(pct) {
@@ -86,8 +107,14 @@ function moneyColor(amount) {
 const ClaudeIndicator = GObject.registerClass(
 class ClaudeIndicator extends PanelMenu.Button {
 
-    _init() {
+    _init(extension, initialAlign = 'left', initialFontSize = DEFAULT_FONT_SIZE) {
         super._init(0.0, 'PowerZoid Claude');
+
+        this._ext          = extension;
+        this._currentAlign = initialAlign;
+        this._fontSize     = initialFontSize;
+        this._fontSizeItem = null;
+        this._alignItems   = {};
 
         // ── Widget en la barra superior ──
         const box = new St.BoxLayout({ style_class: 'panel-status-menu-box' });
@@ -197,6 +224,48 @@ class ClaudeIndicator extends PanelMenu.Button {
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
+        // ── Submenú de alineación ─────────────────────────────────────────
+        this._posSubMenu = new PopupMenu.PopupSubMenuMenuItem('Posición en barra');
+        this.menu.addMenuItem(this._posSubMenu);
+
+        [
+            ['← Alinear a la izquierda', 'left'],
+            ['↔ Alinear al centro',       'center'],
+            ['→ Alinear a la derecha',    'right'],
+        ].forEach(([label, align]) => {
+            const item = new PopupMenu.PopupMenuItem(label);
+            this._alignItems[align] = item;
+            item.connect('activate', () => this._setAlignment(align));
+            this._posSubMenu.menu.addMenuItem(item);
+        });
+        this._updateAlignMarks(this._currentAlign);
+
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+        // ── Tamaño de letra ────────────────────────────────────────────
+        this._fontSizeItem = new PopupMenu.PopupMenuItem(this._fontSizeLabel(), { reactive: false });
+        this._fontSizeItem.label.set_style('color: #aaa; font-style: italic;');
+        this.menu.addMenuItem(this._fontSizeItem);
+
+        const increaseItem = new PopupMenu.PopupMenuItem('A+   Aumentar letra');
+        increaseItem.connect('activate', () => this._changeFontSize(1));
+        this.menu.addMenuItem(increaseItem);
+
+        const decreaseItem = new PopupMenu.PopupMenuItem('A−   Reducir letra');
+        decreaseItem.connect('activate', () => this._changeFontSize(-1));
+        this.menu.addMenuItem(decreaseItem);
+
+        const resetItem = new PopupMenu.PopupMenuItem('↺    Restablecer tamaño');
+        resetItem.connect('activate', () => {
+            this._fontSize = DEFAULT_FONT_SIZE;
+            this._fontSizeItem?.label.set_text(this._fontSizeLabel());
+            this._ext.saveFontSize(this._fontSize);
+            this._refresh();
+        });
+        this.menu.addMenuItem(resetItem);
+
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
         // Botón: Actualización de Claude Desktop (chequeo manual)
         this._desktopUpdateItem = new PopupMenu.PopupMenuItem('↻  Revisar versión de Claude Desktop');
         this._desktopUpdateItem.connect('activate', () => this._onDesktopUpdateActivate());
@@ -229,6 +298,57 @@ class ClaudeIndicator extends PanelMenu.Button {
             REFRESH_SECONDS,
             () => { this._refresh(); return GLib.SOURCE_CONTINUE; }
         );
+    }
+
+    // ── Alineación ─────────────────────────────────────────────────────────
+    _setAlignment(align) {
+        if (align === this._currentAlign) return;
+        this._ext.savePanelPosition(align);
+
+        // Reinicio completo de la extensión: evita bugs de rendering al
+        // reubicar actores directamente entre boxes del panel.
+        const uuid = this._ext.uuid;
+        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            Main.extensionManager.disableExtension(uuid);
+            Main.extensionManager.enableExtension(uuid);
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _updateAlignMarks(activeAlign) {
+        Object.entries(this._alignItems).forEach(([align, item]) => {
+            item.setOrnament(
+                align === activeAlign ? PopupMenu.Ornament.DOT : PopupMenu.Ornament.NONE
+            );
+        });
+    }
+
+    // ── Tamaño de letra ───────────────────────────────────────────────────
+    _fontSizeLabel() {
+        return `Tamaño: ${this._fontSize} px`;
+    }
+
+    _changeFontSize(delta) {
+        this._fontSize = Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, this._fontSize + delta));
+        this._fontSizeItem?.label.set_text(this._fontSizeLabel());
+        this._ext.saveFontSize(this._fontSize);
+        this._refresh();
+    }
+
+    _iconStyle() {
+        return `font-size: ${this._fontSize + 1}px;`;
+    }
+
+    _pctStyle() {
+        return `font-size: ${this._fontSize}px;`;
+    }
+
+    _creditsPanelStyle(color) {
+        return `font-size: ${this._fontSize}px; color: ${color};`;
+    }
+
+    _overusePanelStyle(color) {
+        return `font-size: ${this._fontSize}px; color: ${color};`;
     }
 
     // ── Tiempo hasta el reset ────────────────────────────────────────────
@@ -285,14 +405,16 @@ class ClaudeIndicator extends PanelMenu.Button {
         // ── Barra superior ──
         const timeLeft = this._timeUntil(d.reset_at_iso || '');
         this._iconLabel.set_text(pctToIcon(pct));
+        this._iconLabel.set_style(this._iconStyle());
         this._pctLabel.set_text(
             timeLeft ? ` ${pct}% · ${timeLeft}` : ` ${pct}%`
         );
+        this._pctLabel.set_style(this._pctStyle());
 
         const panelCredits = d.api_credits_usd;
         if (panelCredits !== undefined && panelCredits !== null) {
             this._creditsPanelLabel.set_text(`💳 $${Number(panelCredits).toFixed(2)} `);
-            this._creditsPanelLabel.set_style(`color: ${moneyColor(panelCredits)};`);
+            this._creditsPanelLabel.set_style(this._creditsPanelStyle(moneyColor(panelCredits)));
             this._creditsPanelLabel.visible = true;
         } else {
             this._creditsPanelLabel.visible = false;
@@ -301,7 +423,7 @@ class ClaudeIndicator extends PanelMenu.Button {
         const panelBalance = d.usage_credits_balance_usd;
         if (panelBalance !== undefined && panelBalance !== null) {
             this._usageCreditsPanelLabel.set_text(` 💰 ${formatUsd(panelBalance)}`);
-            this._usageCreditsPanelLabel.set_style(`color: ${moneyColor(panelBalance)};`);
+            this._usageCreditsPanelLabel.set_style(this._overusePanelStyle(moneyColor(panelBalance)));
             this._usageCreditsPanelLabel.visible = true;
         } else {
             this._usageCreditsPanelLabel.visible = false;
@@ -348,7 +470,9 @@ class ClaudeIndicator extends PanelMenu.Button {
 
     _renderEmpty(msg = 'Sin datos') {
         this._iconLabel.set_text(ICON_NEUTRAL);
+        this._iconLabel.set_style(this._iconStyle());
         this._pctLabel.set_text(' ─ ─');
+        this._pctLabel.set_style(this._pctStyle());
         this._menuModel.label.set_text('  PowerZoid Claude');
         this._menuBar.label.set_text(`  ${msg}`);
         this._menuStats.label.set_text('');
@@ -488,12 +612,67 @@ class ClaudeIndicator extends PanelMenu.Button {
 // ── Clase principal de la extensión ───────────────────────────────────────
 export default class PowerZoidClaudeExtension extends Extension {
     enable() {
-        this._indicator = new ClaudeIndicator();
-        Main.panel.addToStatusArea(this.uuid, this._indicator);
+        const align    = this._loadPanelPosition();
+        const fontSize = this._loadFontSize();
+        this._indicator = new ClaudeIndicator(this, align, fontSize);
+        Main.panel.addToStatusArea(this.uuid, this._indicator, -1, align);
     }
 
     disable() {
         this._indicator?.destroy();
         this._indicator = null;
+    }
+
+    // ── Alineación ──────────────────────────────────────────────────────
+    _loadPanelPosition() {
+        try {
+            const file = Gio.File.new_for_path(panelPositionPath());
+            const [, bytes] = file.load_contents(null);
+            const val = new TextDecoder().decode(bytes).trim();
+            return VALID_ALIGNS.includes(val) ? val : 'left';
+        } catch (_e) {}
+        return 'left';
+    }
+
+    savePanelPosition(align) {
+        try {
+            Gio.File.new_for_path(configDirPath()).make_directory_with_parents(null);
+        } catch (_e) {}
+        try {
+            const file = Gio.File.new_for_path(panelPositionPath());
+            file.replace_contents(
+                new TextEncoder().encode(align),
+                null, false,
+                Gio.FileCreateFlags.REPLACE_DESTINATION,
+                null
+            );
+        } catch (_e) {}
+    }
+
+    // ── Tamaño de letra ────────────────────────────────────────────────
+    _loadFontSize() {
+        try {
+            const file = Gio.File.new_for_path(fontSizePath());
+            const [, bytes] = file.load_contents(null);
+            const val = parseInt(new TextDecoder().decode(bytes).trim(), 10);
+            if (Number.isInteger(val))
+                return Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, val));
+        } catch (_e) {}
+        return DEFAULT_FONT_SIZE;
+    }
+
+    saveFontSize(size) {
+        try {
+            Gio.File.new_for_path(configDirPath()).make_directory_with_parents(null);
+        } catch (_e) {}
+        try {
+            const file = Gio.File.new_for_path(fontSizePath());
+            file.replace_contents(
+                new TextEncoder().encode(String(size)),
+                null, false,
+                Gio.FileCreateFlags.REPLACE_DESTINATION,
+                null
+            );
+        } catch (_e) {}
     }
 }
