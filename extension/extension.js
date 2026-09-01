@@ -270,6 +270,19 @@ class ClaudeIndicator extends PanelMenu.Button {
         this._desktopUpdateItem = new PopupMenu.PopupMenuItem('↻  Revisar versión de Claude Desktop');
         this._desktopUpdateItem.connect('activate', () => this._onDesktopUpdateActivate());
         this.menu.addMenuItem(this._desktopUpdateItem);
+
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+        const hideItem = new PopupMenu.PopupMenuItem('🙈  Ocultar esta sesión');
+        hideItem.connect('activate', () => this._hideForSession());
+        this.menu.addMenuItem(hideItem);
+    }
+
+    // Oculta el indicador solo en memoria (sin tocar la config en disco):
+    // vuelve a aparecer normalmente en el próximo inicio de sesión.
+    _hideForSession() {
+        this.menu.close();
+        this.hide();
     }
 
     // ── Monitoreo de archivo ───────────────────────────────────────────────
