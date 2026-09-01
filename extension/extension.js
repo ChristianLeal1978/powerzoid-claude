@@ -305,12 +305,11 @@ class ClaudeIndicator extends PanelMenu.Button {
         if (align === this._currentAlign) return;
         this._ext.savePanelPosition(align);
 
-        // Reinicio completo de la extensión: evita bugs de rendering al
-        // reubicar actores directamente entre boxes del panel.
-        const uuid = this._ext.uuid;
+        // Se difiere con idle_add para dejar terminar el cierre del menú y el
+        // manejo del clic actual antes de destruir este mismo actor.
+        const ext = this._ext;
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-            Main.extensionManager.disableExtension(uuid);
-            Main.extensionManager.enableExtension(uuid);
+            ext.reposition(align);
             return GLib.SOURCE_REMOVE;
         });
     }
@@ -616,12 +615,24 @@ export default class PowerZoidClaudeExtension extends Extension {
         const align    = this._loadPanelPosition();
         const fontSize = this._loadFontSize();
         this._indicator = new ClaudeIndicator(this, align, fontSize);
-        Main.panel.addToStatusArea(this.uuid, this._indicator, -1, align);
+        Main.panel.addToStatusArea(this.uuid, this._indicator, 0, align);
     }
 
     disable() {
         this._indicator?.destroy();
         this._indicator = null;
+    }
+
+    // Recrea el indicador en la caja del panel indicada, sin pasar por
+    // disableExtension/enableExtension: esas funciones tocan el gsetting
+    // persistente "enabled-extensions" y compiten con el propio manejador
+    // de GNOME Shell para ese cambio, dejando la extensión en estado
+    // INACTIVE (el ícono desaparece) en vez de simplemente reubicarse.
+    reposition(align) {
+        const fontSize = this._indicator?._fontSize ?? this._loadFontSize();
+        this._indicator?.destroy();
+        this._indicator = new ClaudeIndicator(this, align, fontSize);
+        Main.panel.addToStatusArea(this.uuid, this._indicator, 0, align);
     }
 
     // ── Alineación ──────────────────────────────────────────────────────
