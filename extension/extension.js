@@ -540,7 +540,8 @@ class ClaudeIndicator extends PanelMenu.Button {
 
     _renderDesktopUpdate(data) {
         if (data.update_available) {
-            this._desktopUpdateItem.label.set_text(`⬇  Actualizar Claude Desktop a v${data.latest}`);
+            const verb = data.installed === 'no-instalado' ? 'Instalar' : 'Actualizar a';
+            this._desktopUpdateItem.label.set_text(`⬇  ${verb} Claude Desktop v${data.latest}`);
         } else {
             this._desktopUpdateItem.label.set_text(`✓  Claude Desktop al día (v${data.installed})`);
         }

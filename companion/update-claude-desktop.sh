@@ -43,13 +43,23 @@ for arg in "$@"; do
   esac
 done
 
-for cmd in curl alien rpm sudo; do
+for cmd in curl rpm; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     json_fail "Falta '$cmd'. Instálalo con: sudo dnf install $cmd"
   fi
 done
 
-INSTALLED_VERSION=$(rpm -q claude-desktop --qf '%{VERSION}' 2>/dev/null || echo "no-instalado")
+if ! $CHECK_ONLY; then
+  for cmd in alien sudo; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+      json_fail "Falta '$cmd'. Instálalo con: sudo dnf install $cmd"
+    fi
+  done
+fi
+
+if ! INSTALLED_VERSION=$(rpm -q claude-desktop --qf '%{VERSION}' 2>/dev/null); then
+  INSTALLED_VERSION="no-instalado"
+fi
 log "Versión instalada: $INSTALLED_VERSION"
 
 LATEST_FILENAME=$(curl -fsS "$PACKAGES_URL" \
