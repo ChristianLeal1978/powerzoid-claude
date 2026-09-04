@@ -453,6 +453,24 @@ def fetch_usage(cookies: dict) -> dict | None:
     return result
 
 
+# Mismo endpoint que consulta la página Configuración → Uso → "Usage credits"
+# de claude.ai. A diferencia de powerzoid-claude-credits-poller (que abre un
+# navegador Chromium automatizado y choca con Cloudflare), esto es una simple
+# petición GET autenticada por cookie, igual que /usage arriba — por eso sí
+# funciona sin sesión visible ni navegador abierto.
+def fetch_credits_balance(cookies: dict, org_uuid: str) -> float | None:
+    data = api_get(f"/api/organizations/{org_uuid}/prepaid/credits", cookies)
+    if not isinstance(data, dict):
+        return None
+    amount = data.get("amount")
+    if amount is None:
+        return None
+    try:
+        return round(amount / 100, 2)
+    except (TypeError, ValueError):
+        return None
+
+
 def save_usage(usage: dict):
     USAGE_DIR.mkdir(parents=True, exist_ok=True)
     existing = {}
@@ -472,6 +490,21 @@ def save_usage(usage: dict):
         f"({merged.get('used','?')}/{merged.get('limit','?')})", G)
 
 
+def save_credits_balance(balance_usd: float):
+    USAGE_DIR.mkdir(parents=True, exist_ok=True)
+    existing = {}
+    if USAGE_FILE.exists():
+        try:
+            existing = json.loads(USAGE_FILE.read_text())
+        except Exception:
+            pass
+    existing["usage_credits_balance_usd"]        = balance_usd
+    existing["usage_credits_balance_updated_at"] = datetime.now().strftime("%H:%M  %d/%m/%Y")
+    existing["usage_credits_balance_source"]     = "poller"
+    USAGE_FILE.write_text(json.dumps(existing, indent=2, ensure_ascii=False))
+    log(f"Guardado: usage credits ${balance_usd:.2f}", G)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  ENTRYPOINTS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -488,13 +521,25 @@ def run_once(verbose=True) -> bool:
 
     log(f"Usando cookies de {BOLD}{browser_name}{NC}", G)
 
+    ok = False
+
     usage = fetch_usage(cookies)
     if usage:
         save_usage(usage)
-        return True
+        ok = True
+    else:
+        log("No se encontraron datos de uso.", Y)
 
-    log("No se encontraron datos de uso.", Y)
-    return False
+    org_uuid = get_org_uuid(cookies)
+    if org_uuid:
+        balance = fetch_credits_balance(cookies, org_uuid)
+        if balance is not None:
+            save_credits_balance(balance)
+            ok = True
+        else:
+            log("No se encontró el saldo de usage credits.", Y)
+
+    return ok
 
 
 def debug_dump():
@@ -513,6 +558,7 @@ def debug_dump():
         endpoints += [
             f"/api/organizations/{org_uuid}/usage",
             f"/api/organizations/{org_uuid}/rate_limits",
+            f"/api/organizations/{org_uuid}/prepaid/credits",
         ]
 
     for ep in endpoints:
