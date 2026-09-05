@@ -92,12 +92,16 @@ class UsageHandler(BaseHTTPRequestHandler):
             if pct is None and balance is None:
                 raise ValueError("Falta 'percentage' o 'usage_credits_balance_usd'")
 
-            now = datetime.now().strftime("%H:%M  %d/%m/%Y")
+            now_dt  = datetime.now().astimezone()
+            now     = now_dt.strftime("%H:%M  %d/%m/%Y")
+            now_iso = now_dt.isoformat()
             if pct is not None:
-                data["updated_at"] = now
+                data["updated_at"]     = now
+                data["updated_at_iso"] = now_iso
             if balance is not None:
-                data["usage_credits_balance_updated_at"] = now
-                data["usage_credits_balance_source"]     = "userscript"
+                data["usage_credits_balance_updated_at"]     = now
+                data["usage_credits_balance_updated_at_iso"] = now_iso
+                data["usage_credits_balance_source"]         = "userscript"
 
             # Combinar con lo que ya había en disco: distintos triggers del
             # userscript mandan campos distintos (% de uso vs. saldo de

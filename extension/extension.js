@@ -50,6 +50,29 @@ const CONFIG_DIR_PARTS  = ['.config', 'powerzoid-claude'];
 const POSITION_FILE     = 'panel-position';
 const FONT_SIZE_FILE    = 'font-size';
 
+// ── Detección de datos desactualizados ──────────────────────────────────────
+// Umbrales de antigüedad (minutos) antes de avisar que una fuente dejó de
+// refrescarse. powerzoid-claude-poller corre cada 60s (uso y usage credits);
+// powerzoid-claude-credits-poller corre cada 15 min (créditos de API), así
+// que se le da más margen para tolerar corridas fallidas puntuales.
+const STALE_CHECKS = [
+    {
+        key: 'usage', isoField: 'updated_at_iso', presenceField: 'percentage',
+        thresholdMin: 10, label: 'Uso de mensajes',
+        hint: 'Revisa: systemctl --user status powerzoid-claude-poller.timer',
+    },
+    {
+        key: 'usageCredits', isoField: 'usage_credits_balance_updated_at_iso', presenceField: 'usage_credits_balance_usd',
+        thresholdMin: 20, label: 'Usage credits (💰)',
+        hint: 'Revisa: systemctl --user status powerzoid-claude-poller.timer',
+    },
+    {
+        key: 'apiCredits', isoField: 'api_credits_updated_at_iso', presenceField: 'api_credits_usd',
+        thresholdMin: 45, label: 'Créditos de API (💳)',
+        hint: 'La sesión pudo expirar — ejecuta: powerzoid-claude-credits-poller --login',
+    },
+];
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 function usageFilePath() {
     return GLib.build_filenamev([GLib.get_home_dir(), ...USAGE_FILE_PARTS]);
@@ -115,6 +138,8 @@ class ClaudeIndicator extends PanelMenu.Button {
         this._fontSize     = initialFontSize;
         this._fontSizeItem = null;
         this._alignItems   = {};
+        this._staleNotified = {};   // key → ya se avisó de esta racha de datos viejos
+        this._staleActive   = {};   // key → actualmente desactualizado (para el ícono ⚠)
 
         // ── Widget en la barra superior ──
         const box = new St.BoxLayout({ style_class: 'panel-status-menu-box' });
@@ -351,8 +376,9 @@ class ClaudeIndicator extends PanelMenu.Button {
         return `font-size: ${this._fontSize + 1}px;`;
     }
 
-    _pctStyle() {
-        return `font-size: ${this._fontSize}px;`;
+    _pctStyle(stale = false) {
+        const color = stale ? ` color: ${MONEY_COLOR_LOW};` : '';
+        return `font-size: ${this._fontSize}px;${color}`;
     }
 
     _creditsPanelStyle(color) {
@@ -381,6 +407,56 @@ class ClaudeIndicator extends PanelMenu.Button {
         } catch (_) {
             return '';
         }
+    }
+
+    // ── Datos desactualizados ──────────────────────────────────────────────
+    _formatAge(isoString) {
+        if (!isoString) return '';
+        const ts = Date.parse(isoString);
+        if (Number.isNaN(ts)) return '';
+        const diffMin = Math.max(0, Math.floor((Date.now() - ts) / 60000));
+        if (diffMin < 60) return `${diffMin} min`;
+        const h = Math.floor(diffMin / 60);
+        const m = diffMin % 60;
+        return `${h}h ${m}m`;
+    }
+
+    // Compara cada timestamp *_iso contra su umbral y avisa por notificación
+    // de escritorio la primera vez que una fuente cruza el umbral (no en
+    // cada refresco mientras siga desactualizada). Devuelve qué claves están
+    // desactualizadas ahora mismo, para marcarlas visualmente en el panel.
+    _checkStaleness(d) {
+        const stale = {};
+        for (const check of STALE_CHECKS) {
+            const present  = d[check.presenceField] !== undefined && d[check.presenceField] !== null;
+            const iso      = d[check.isoField];
+            let   isStale  = false;
+
+            if (present && iso) {
+                const ts = Date.parse(iso);
+                if (!Number.isNaN(ts)) {
+                    const ageMin = (Date.now() - ts) / 60000;
+                    isStale = ageMin > check.thresholdMin;
+                }
+            }
+
+            stale[check.key] = isStale;
+            this._staleActive[check.key] = isStale;
+
+            if (isStale && !this._staleNotified[check.key]) {
+                this._staleNotified[check.key] = true;
+                log(`[PowerZoid Claude] Aviso de datos desactualizados: ${check.key} (hace ${this._formatAge(iso)})`);
+                this._notify(
+                    'Datos desactualizados',
+                    `${check.label} lleva más de ${check.thresholdMin} min sin refrescarse ` +
+                    `(hace ${this._formatAge(iso)}).\n${check.hint}`,
+                    'dialog-warning-symbolic'
+                );
+            } else if (!isStale) {
+                this._staleNotified[check.key] = false;
+            }
+        }
+        return stale;
     }
 
     // ── Lectura y renderizado ─────────────────────────────────────────────
@@ -414,19 +490,22 @@ class ClaudeIndicator extends PanelMenu.Button {
         const resetAt = d.reset_at  ?? 'N/D';
         const updAt   = d.updated_at ?? '';
 
+        const stale = this._checkStaleness(d);
+
         // ── Barra superior ──
         const timeLeft = this._timeUntil(d.reset_at_iso || '');
         this._iconLabel.set_text(pctToIcon(pct));
         this._iconLabel.set_style(this._iconStyle());
         this._pctLabel.set_text(
-            timeLeft ? ` ${pct}% · ${timeLeft}` : ` ${pct}%`
+            (timeLeft ? ` ${pct}% · ${timeLeft}` : ` ${pct}%`) + (stale.usage ? ' ⚠' : '')
         );
-        this._pctLabel.set_style(this._pctStyle());
+        this._pctLabel.set_style(this._pctStyle(stale.usage));
 
         const panelCredits = d.api_credits_usd;
         if (panelCredits !== undefined && panelCredits !== null) {
-            this._creditsPanelLabel.set_text(`💳 $${Number(panelCredits).toFixed(2)} `);
-            this._creditsPanelLabel.set_style(this._creditsPanelStyle(moneyColor(panelCredits)));
+            const warn = stale.apiCredits ? ' ⚠' : '';
+            this._creditsPanelLabel.set_text(`💳 $${Number(panelCredits).toFixed(2)}${warn} `);
+            this._creditsPanelLabel.set_style(this._creditsPanelStyle(stale.apiCredits ? MONEY_COLOR_LOW : moneyColor(panelCredits)));
             this._creditsPanelLabel.visible = true;
         } else {
             this._creditsPanelLabel.visible = false;
@@ -434,8 +513,9 @@ class ClaudeIndicator extends PanelMenu.Button {
 
         const panelBalance = d.usage_credits_balance_usd;
         if (panelBalance !== undefined && panelBalance !== null) {
-            this._usageCreditsPanelLabel.set_text(` 💰 ${formatUsd(panelBalance)}`);
-            this._usageCreditsPanelLabel.set_style(this._overusePanelStyle(moneyColor(panelBalance)));
+            const warn = stale.usageCredits ? ' ⚠' : '';
+            this._usageCreditsPanelLabel.set_text(` 💰 ${formatUsd(panelBalance)}${warn}`);
+            this._usageCreditsPanelLabel.set_style(this._overusePanelStyle(stale.usageCredits ? MONEY_COLOR_LOW : moneyColor(panelBalance)));
             this._usageCreditsPanelLabel.visible = true;
         } else {
             this._usageCreditsPanelLabel.visible = false;
@@ -457,11 +537,12 @@ class ClaudeIndicator extends PanelMenu.Button {
         const credits = d.api_credits_usd;
         if (credits !== undefined && credits !== null) {
             const total = d.api_credits_total_usd;
-            const text  = total
+            let text  = total
                 ? `  💳 Créditos API: $${Number(credits).toFixed(2)} / $${Number(total).toFixed(2)}`
                 : `  💳 Créditos API: $${Number(credits).toFixed(2)}`;
+            if (stale.apiCredits) text += `  ⚠ sin actualizar hace ${this._formatAge(d.api_credits_updated_at_iso)}`;
             this._menuCredits.label.set_text(text);
-            this._menuCredits.label.set_style(`color: ${moneyColor(credits)};`);
+            this._menuCredits.label.set_style(`color: ${stale.apiCredits ? MONEY_COLOR_LOW : moneyColor(credits)};`);
             this._menuCredits.visible = true;
         } else {
             this._menuCredits.visible = false;
@@ -470,10 +551,10 @@ class ClaudeIndicator extends PanelMenu.Button {
         // ── Saldo de usage credits (claude.ai) ──
         const balance = d.usage_credits_balance_usd;
         if (balance !== undefined && balance !== null) {
-            this._menuUsageCreditsBalance.label.set_text(
-                `  💰 Usage credits: ${formatUsd(balance)}`
-            );
-            this._menuUsageCreditsBalance.label.set_style(`color: ${moneyColor(balance)};`);
+            let text = `  💰 Usage credits: ${formatUsd(balance)}`;
+            if (stale.usageCredits) text += `  ⚠ sin actualizar hace ${this._formatAge(d.usage_credits_balance_updated_at_iso)}`;
+            this._menuUsageCreditsBalance.label.set_text(text);
+            this._menuUsageCreditsBalance.label.set_style(`color: ${stale.usageCredits ? MONEY_COLOR_LOW : moneyColor(balance)};`);
             this._menuUsageCreditsBalance.visible = true;
         } else {
             this._menuUsageCreditsBalance.visible = false;
@@ -481,6 +562,13 @@ class ClaudeIndicator extends PanelMenu.Button {
     }
 
     _renderEmpty(msg = 'Sin datos') {
+        // Sin archivo de datos no hay nada que esté "desactualizado" —
+        // resetea silenciosamente para no arrastrar avisos previos.
+        for (const check of STALE_CHECKS) {
+            this._staleActive[check.key]   = false;
+            this._staleNotified[check.key] = false;
+        }
+
         this._iconLabel.set_text(ICON_NEUTRAL);
         this._iconLabel.set_style(this._iconStyle());
         this._pctLabel.set_text(' ─ ─');
@@ -591,6 +679,11 @@ class ClaudeIndicator extends PanelMenu.Button {
     }
 
     _notifyDesktopUpdateError(msg) {
+        this._notify('Claude Desktop', msg);
+    }
+
+    // ── Notificaciones de escritorio (genérico) ────────────────────────────
+    _notify(title, msg, iconName = 'dialog-error-symbolic') {
         if (!this._notifSource) {
             this._notifSource = new MessageTray.Source({
                 title: 'PowerZoid Claude',
@@ -601,9 +694,9 @@ class ClaudeIndicator extends PanelMenu.Button {
 
         const notification = new MessageTray.Notification({
             source: this._notifSource,
-            title: 'Claude Desktop',
+            title,
             body: msg,
-            iconName: 'dialog-error-symbolic',
+            iconName,
         });
         this._notifSource.addNotification(notification);
     }

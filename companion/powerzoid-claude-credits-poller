@@ -104,9 +104,11 @@ def save_credits(amount: float):
             data = json.loads(USAGE_FILE.read_text())
         except Exception:
             pass
-    data["api_credits_usd"]        = round(amount, 2)
-    data["api_credits_updated_at"] = datetime.now().strftime("%H:%M  %d/%m/%Y")
-    data["api_credits_source"]     = "console-poller"
+    now = datetime.now().astimezone()
+    data["api_credits_usd"]            = round(amount, 2)
+    data["api_credits_updated_at"]     = now.strftime("%H:%M  %d/%m/%Y")
+    data["api_credits_updated_at_iso"] = now.isoformat()
+    data["api_credits_source"]         = "console-poller"
     USAGE_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False))
 
 
