@@ -21,10 +21,11 @@ PORT       = 7891
 USAGE_DIR  = Path.home() / ".local" / "share" / "powerzoid-claude"
 USAGE_FILE = USAGE_DIR / "usage.json"
 
-# Solo aceptar peticiones desde claude.ai
+# Solo aceptar peticiones desde claude.ai y platform.openai.com
 ALLOWED_ORIGINS = {
     "https://claude.ai",
     "https://www.claude.ai",
+    "https://platform.openai.com",
 }
 
 # ── Colores para el log ───────────────────────────────────────────────────
@@ -89,8 +90,11 @@ class UsageHandler(BaseHTTPRequestHandler):
 
             pct     = data.get("percentage")
             balance = data.get("usage_credits_balance_usd")
-            if pct is None and balance is None:
-                raise ValueError("Falta 'percentage' o 'usage_credits_balance_usd'")
+            openai_credits = data.get("openai_credits_usd")
+            if pct is None and balance is None and openai_credits is None:
+                raise ValueError(
+                    "Falta 'percentage', 'usage_credits_balance_usd' u 'openai_credits_usd'"
+                )
 
             now_dt  = datetime.now().astimezone()
             now     = now_dt.strftime("%H:%M  %d/%m/%Y")
@@ -102,6 +106,10 @@ class UsageHandler(BaseHTTPRequestHandler):
                 data["usage_credits_balance_updated_at"]     = now
                 data["usage_credits_balance_updated_at_iso"] = now_iso
                 data["usage_credits_balance_source"]         = "userscript"
+            if openai_credits is not None:
+                data["openai_credits_updated_at"]     = now
+                data["openai_credits_updated_at_iso"]  = now_iso
+                data["openai_credits_source"]          = "userscript"
 
             # Combinar con lo que ya había en disco: distintos triggers del
             # userscript mandan campos distintos (% de uso vs. saldo de
@@ -132,6 +140,8 @@ class UsageHandler(BaseHTTPRequestHandler):
                       f"{D}{used}/{limit}  {model}{NC}")
             if balance is not None:
                 print(f"{D}[{ts()}]{NC} {G}💰 Usage credits: ${float(balance):.2f}{NC}")
+            if openai_credits is not None:
+                print(f"{D}[{ts()}]{NC} {G}🔷 Créditos OpenAI: ${float(openai_credits):.2f}{NC}")
 
             # Respuesta OK
             resp = json.dumps({"ok": True}).encode()

@@ -137,6 +137,46 @@ def _print_credits(data: dict):
     print(f"{BOLD}{line}{RESET}\n")
 
 
+# ── Subcomando: openai-credits ────────────────────────────────────────────
+def cmd_openai_credits(args):
+    data = load_usage()
+
+    if args.amount is not None:
+        data["openai_credits_usd"] = round(args.amount, 2)
+
+    if args.amount is None:
+        credits = data.get("openai_credits_usd")
+        if credits is None:
+            print(f"{YELLOW}Sin créditos de OpenAI registrados.{RESET}")
+            print(f"Usa:  {BOLD}powerzoid-claude openai-credits 12.30{RESET}")
+            return
+        _print_openai_credits(data)
+        return
+
+    now = datetime.now().astimezone()
+    data["openai_credits_updated_at"]     = now.strftime("%H:%M  %d/%m/%Y")
+    data["openai_credits_updated_at_iso"] = now.isoformat()
+    data["openai_credits_source"]         = "manual"
+    save_usage(data)
+    print(f"{GREEN}✓ Créditos de OpenAI guardados{RESET}  →  {DIM}{USAGE_FILE}{RESET}")
+    print()
+    _print_openai_credits(data)
+
+
+def _print_openai_credits(data: dict):
+    credits = data.get("openai_credits_usd")
+    upd_at  = data.get("openai_credits_updated_at", "N/D")
+
+    if credits is None:
+        return
+
+    line = "─" * 44
+    print(f"\n{BOLD}{line}{RESET}")
+    print(f"  {BOLD}Créditos OpenAI{RESET}  ·  {BLUE}${credits:.2f}{RESET} restantes")
+    print(f"  Actualiz. : {DIM}{upd_at}{RESET}")
+    print(f"{BOLD}{line}{RESET}\n")
+
+
 # ── Subcomando: set ───────────────────────────────────────────────────────
 def cmd_set(args):
     data = load_usage()
@@ -209,6 +249,10 @@ def _print_status(data: dict):
         total = data.get("api_credits_total_usd")
         suffix = f" / ${total:.2f}" if total else ""
         print(f"  Créditos  : {GREEN}${credits:.2f}{RESET}{suffix}")
+
+    openai_credits = data.get("openai_credits_usd")
+    if openai_credits is not None:
+        print(f"  OpenAI    : {BLUE}${openai_credits:.2f}{RESET}")
 
     print(f"{BOLD}{line}{RESET}\n")
 
@@ -323,6 +367,7 @@ Ejemplos:
   powerzoid-claude fetch
   powerzoid-claude credits 42.50
   powerzoid-claude credits 42.50 --total 100
+  powerzoid-claude openai-credits 12.30
         """,
     )
     sub = p.add_subparsers(dest="command", metavar="<comando>")
@@ -362,6 +407,11 @@ Ejemplos:
     pcr.add_argument("--total", type=float, metavar="USD",
                       help="Créditos totales comprados/asignados, para mostrar la barra de progreso")
 
+    # openai-credits
+    poc = sub.add_parser("openai-credits", help="Establece los créditos de OpenAI restantes (manual)")
+    poc.add_argument("amount", type=float, nargs="?",
+                      help="Créditos restantes en USD, e.g.: powerzoid-claude openai-credits 12.30")
+
     return p
 
 
@@ -376,6 +426,7 @@ def main():
         "config": cmd_config,
         "fetch":  cmd_fetch,
         "credits": cmd_credits,
+        "openai-credits": cmd_openai_credits,
     }
 
     fn = dispatch.get(args.command)

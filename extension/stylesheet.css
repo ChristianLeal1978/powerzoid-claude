@@ -29,6 +29,13 @@
     /* color: dinámico según saldo — ver moneyColor() en extension.js */
 }
 
+.powerzoid-claude-openai-panel {
+    font-size: 12px;
+    font-weight: bold;
+    margin-left: 4px;
+    /* color: azul fijo (OPENAI_COLOR) — ver extension.js */
+}
+
 /* ── Elementos del menú desplegable ────────────────────────────────────── */
 .powerzoid-claude-menu-model {
     font-weight: bold;

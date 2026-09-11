@@ -15,7 +15,8 @@
  *     "reset_at": "mañana 09:00",
  *     "updated_at": "14:30 08/06/2026",
  *     "api_credits_usd": 48.41,
- *     "usage_credits_balance_usd": 7.57
+ *     "usage_credits_balance_usd": 7.57,
+ *     "openai_credits_usd": 12.30
  *   }
  */
 
@@ -71,6 +72,11 @@ const STALE_CHECKS = [
         thresholdMin: 45, label: 'Créditos de API (💳)',
         hint: 'La sesión pudo expirar — ejecuta: powerzoid-claude-credits-poller --login',
     },
+    {
+        key: 'openaiCredits', isoField: 'openai_credits_updated_at_iso', presenceField: 'openai_credits_usd',
+        thresholdMin: 45, label: 'Créditos de OpenAI (🔷)',
+        hint: 'Abre platform.openai.com (el userscript lo refresca solo) o actualízalo a mano: powerzoid-claude openai-credits <monto>',
+    },
 ];
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -118,6 +124,11 @@ function formatUsd(amount) {
 const MONEY_COLOR_OK   = '#a6e3a1';
 const MONEY_COLOR_WARN = '#f9e2af';
 const MONEY_COLOR_LOW  = '#f38ba8';
+
+// Créditos de OpenAI: siempre en azul (no varían de color según el saldo),
+// salvo cuando el dato está desactualizado, donde se usa MONEY_COLOR_LOW
+// igual que las demás fuentes.
+const OPENAI_COLOR = '#89b4fa';
 
 function moneyColor(amount) {
     const n = Number(amount);
@@ -170,10 +181,18 @@ class ClaudeIndicator extends PanelMenu.Button {
         });
         this._usageCreditsPanelLabel.visible = false;
 
+        this._openaiCreditsPanelLabel = new St.Label({
+            text: '',
+            y_align: Clutter.ActorAlign.CENTER,
+            style_class: 'powerzoid-claude-openai-panel',
+        });
+        this._openaiCreditsPanelLabel.visible = false;
+
         box.add_child(this._creditsPanelLabel);
         box.add_child(this._iconLabel);
         box.add_child(this._pctLabel);
         box.add_child(this._usageCreditsPanelLabel);
+        box.add_child(this._openaiCreditsPanelLabel);
         this.add_child(box);
 
         // ── Menú desplegable ──
@@ -219,6 +238,11 @@ class ClaudeIndicator extends PanelMenu.Button {
         this._menuUsageCreditsBalance = new PopupMenu.PopupMenuItem('', { reactive: false });
         this._menuUsageCreditsBalance.visible = false;
         this.menu.addMenuItem(this._menuUsageCreditsBalance);
+
+        // Créditos de la API de OpenAI (opcional)
+        this._menuOpenaiCredits = new PopupMenu.PopupMenuItem('', { reactive: false });
+        this._menuOpenaiCredits.visible = false;
+        this.menu.addMenuItem(this._menuOpenaiCredits);
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
@@ -389,6 +413,10 @@ class ClaudeIndicator extends PanelMenu.Button {
         return `font-size: ${this._fontSize}px; color: ${color};`;
     }
 
+    _openaiPanelStyle(color) {
+        return `font-size: ${this._fontSize}px; color: ${color};`;
+    }
+
     // ── Tiempo hasta el reset ────────────────────────────────────────────
     _timeUntil(isoString) {
         if (!isoString) return '';
@@ -521,6 +549,16 @@ class ClaudeIndicator extends PanelMenu.Button {
             this._usageCreditsPanelLabel.visible = false;
         }
 
+        const panelOpenai = d.openai_credits_usd;
+        if (panelOpenai !== undefined && panelOpenai !== null) {
+            const warn = stale.openaiCredits ? ' ⚠' : '';
+            this._openaiCreditsPanelLabel.set_text(` 🔷 ${formatUsd(panelOpenai)}${warn}`);
+            this._openaiCreditsPanelLabel.set_style(this._openaiPanelStyle(stale.openaiCredits ? MONEY_COLOR_LOW : OPENAI_COLOR));
+            this._openaiCreditsPanelLabel.visible = true;
+        } else {
+            this._openaiCreditsPanelLabel.visible = false;
+        }
+
         // ── Menú ──
         this._menuModel.label.set_text(`  ${model}${plan}`);
 
@@ -559,6 +597,18 @@ class ClaudeIndicator extends PanelMenu.Button {
         } else {
             this._menuUsageCreditsBalance.visible = false;
         }
+
+        // ── Créditos de la API de OpenAI (opcional) ──
+        const openaiCredits = d.openai_credits_usd;
+        if (openaiCredits !== undefined && openaiCredits !== null) {
+            let text = `  🔷 Créditos OpenAI: ${formatUsd(openaiCredits)}`;
+            if (stale.openaiCredits) text += `  ⚠ sin actualizar hace ${this._formatAge(d.openai_credits_updated_at_iso)}`;
+            this._menuOpenaiCredits.label.set_text(text);
+            this._menuOpenaiCredits.label.set_style(`color: ${stale.openaiCredits ? MONEY_COLOR_LOW : OPENAI_COLOR};`);
+            this._menuOpenaiCredits.visible = true;
+        } else {
+            this._menuOpenaiCredits.visible = false;
+        }
     }
 
     _renderEmpty(msg = 'Sin datos') {
@@ -581,6 +631,8 @@ class ClaudeIndicator extends PanelMenu.Button {
         this._creditsPanelLabel.visible = false;
         this._menuUsageCreditsBalance.visible = false;
         this._usageCreditsPanelLabel.visible = false;
+        this._menuOpenaiCredits.visible = false;
+        this._openaiCreditsPanelLabel.visible = false;
     }
 
     // ── Actualización de Claude Desktop (chequeo manual) ──────────────────

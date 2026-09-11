@@ -1,0 +1,10 @@
+[Unit]
+Description=Ejecuta powerzoid-claude-openai-poller cada 15 minutos
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+Unit=powerzoid-claude-openai-poller.service
+
+[Install]
+WantedBy=timers.target

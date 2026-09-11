@@ -1,0 +1,195 @@
+#!/usr/bin/env python3
+"""
+powerzoid-claude-openai-poller — Intenta obtener automáticamente el saldo de créditos
+de OpenAI desde el Billing overview del Platform (no hay API pública para esto),
+usando un navegador Chromium controlado por Playwright con sesión persistente.
+
+⚠ LIMITACIÓN CONOCIDA: a diferencia de platform.claude.com, el login de OpenAI
+(auth.openai.com, protegido por Cloudflare) suele rechazar navegadores controlados
+por automatización — incluso en modo visible con login manual (--login). Si eso te
+pasa, este poller no es viable y la alternativa recomendada es la entrada
+manual:
+    powerzoid-claude openai-credits 12.30
+
+Primer uso (una sola vez, puede fallar por lo anterior):
+    powerzoid-claude-openai-poller --login
+    → Se abre un navegador visible. Inicia sesión normalmente y espera a ver
+      el Billing overview con la tarjeta "Credit balance". Vuelve a la terminal
+      y presiona Enter.
+
+Uso normal (automático, sin ventana visible):
+    powerzoid-claude-openai-poller             # una consulta
+    powerzoid-claude-openai-poller --watch      # bucle cada --interval segundos
+
+La sesión (cookies) queda guardada en un perfil de Chromium dedicado en:
+    ~/.local/share/powerzoid-claude/browser-profile-openai
+Esto no toca tu navegador normal ni tus otras cuentas, ni el perfil usado para
+el poller de créditos de Anthropic.
+"""
+
+import argparse
+import json
+import re
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+BILLING_URL = "https://platform.openai.com/settings/organization/billing/overview"
+USAGE_DIR   = Path.home() / ".local" / "share" / "powerzoid-claude"
+USAGE_FILE  = USAGE_DIR / "usage.json"
+PROFILE_DIR = USAGE_DIR / "browser-profile-openai"
+
+G = "\033[92m"; Y = "\033[93m"; R = "\033[91m"
+B = "\033[2m";  NC = "\033[0m"; BOLD = "\033[1m"
+
+def ts():  return datetime.now().strftime("%H:%M:%S")
+def log(msg, col=""): print(f"{B}[{ts()}]{NC} {col}{msg}{NC}")
+
+
+# Busca "$XX.XX" apareciendo después de la etiqueta "Credit balance"
+# en el texto visible de la página (independiente de la estructura exacta del DOM).
+CREDIT_RE = re.compile(r"Credit balance.{0,200}?\$([\d,]+\.\d{2})",
+                        re.IGNORECASE | re.DOTALL)
+
+
+def _get_playwright():
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        log("El paquete 'playwright' no está instalado.", R)
+        log("Instálalo con:", Y)
+        log("  pip install --user playwright", Y)
+        log("  python3 -m playwright install chromium", Y)
+        sys.exit(1)
+    return sync_playwright().start()
+
+
+def _open_context(headless: bool):
+    PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+    pw = _get_playwright()
+    try:
+        context = pw.chromium.launch_persistent_context(
+            str(PROFILE_DIR),
+            headless=headless,
+            viewport={"width": 1280, "height": 900},
+        )
+    except Exception as e:
+        pw.stop()
+        log(f"No se pudo iniciar Chromium: {e}", R)
+        log("¿Falta el navegador? Instálalo con: python3 -m playwright install chromium", Y)
+        sys.exit(1)
+    return pw, context
+
+
+def extract_credits(page) -> float | None:
+    try:
+        page.wait_for_load_state("networkidle", timeout=15000)
+    except Exception:
+        pass
+    try:
+        page.wait_for_selector("text=Credit balance", timeout=10000)
+    except Exception:
+        pass
+    text = page.inner_text("body")
+    m = CREDIT_RE.search(text)
+    if not m:
+        return None
+    return float(m.group(1).replace(",", ""))
+
+
+def save_credits(amount: float):
+    USAGE_DIR.mkdir(parents=True, exist_ok=True)
+    data = {}
+    if USAGE_FILE.exists():
+        try:
+            data = json.loads(USAGE_FILE.read_text())
+        except Exception:
+            pass
+    now = datetime.now().astimezone()
+    data["openai_credits_usd"]            = round(amount, 2)
+    data["openai_credits_updated_at"]     = now.strftime("%H:%M  %d/%m/%Y")
+    data["openai_credits_updated_at_iso"] = now.isoformat()
+    data["openai_credits_source"]         = "openai-console-poller"
+    USAGE_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+
+
+def cmd_login():
+    pw, context = _open_context(headless=False)
+    page = context.pages[0] if context.pages else context.new_page()
+    page.goto(BILLING_URL)
+    log("Inicia sesión en la ventana del navegador que se abrió.", Y)
+    log("Cuando veas el Billing overview con la tarjeta 'Credit balance',", Y)
+    log("vuelve aquí y presiona Enter.", Y)
+    try:
+        input()
+    except (EOFError, KeyboardInterrupt):
+        pass
+
+    credits = extract_credits(page)
+    if credits is not None:
+        save_credits(credits)
+        log(f"✓ Saldo detectado y guardado: ${credits:.2f}", G)
+    else:
+        log("No se pudo detectar el saldo todavía.", R)
+        log("Verifica que la página muestre la tarjeta 'Credit balance' y reintenta.", Y)
+        log("Si el login quedó atascado en la verificación de Cloudflare, este método", Y)
+        log("no es viable en tu cuenta — usa la entrada manual en su lugar:", Y)
+        log("  powerzoid-claude openai-credits 12.30", Y)
+
+    context.close()
+    pw.stop()
+    sys.exit(0 if credits is not None else 1)
+
+
+def run_once(headless: bool) -> bool:
+    pw, context = _open_context(headless=headless)
+    page = context.pages[0] if context.pages else context.new_page()
+
+    credits = None
+    try:
+        page.goto(BILLING_URL, timeout=30000)
+        credits = extract_credits(page)
+    except Exception as e:
+        log(f"Error al cargar el Billing overview: {e}", R)
+    finally:
+        context.close()
+        pw.stop()
+
+    if credits is None:
+        log("No se pudo leer el saldo.", R)
+        log("Si la sesión expiró, vuelve a correr: powerzoid-claude-openai-poller --login", Y)
+        return False
+
+    save_credits(credits)
+    log(f"✓ Créditos OpenAI: ${credits:.2f}", G)
+    return True
+
+
+def main():
+    p = argparse.ArgumentParser(prog="powerzoid-claude-openai-poller")
+    p.add_argument("--login",    action="store_true",
+                    help="Abre el navegador visible para iniciar sesión (una sola vez)")
+    p.add_argument("--watch",    action="store_true", help="Bucle cada --interval segundos")
+    p.add_argument("--interval", type=int, default=900,
+                    help="Segundos entre consultas en modo --watch (default: 900 = 15 min)")
+    p.add_argument("--debug",    action="store_true",
+                    help="Corre con navegador visible (útil para depurar el scraping)")
+    args = p.parse_args()
+
+    if args.login:
+        cmd_login()
+        return
+
+    if args.watch:
+        log(f"Modo watch — cada {args.interval}s  (Ctrl+C para detener)")
+        while True:
+            run_once(headless=not args.debug)
+            time.sleep(args.interval)
+    else:
+        ok = run_once(headless=not args.debug)
+        sys.exit(0 if ok else 1)
+
+
+if __name__ == "__main__":
+    main()

@@ -44,9 +44,10 @@ cp "$DIR/companion/powerzoid-claude"                 "$BIN_DIR/powerzoid-claude"
 cp "$DIR/companion/powerzoid-claude-server"          "$BIN_DIR/powerzoid-claude-server"
 cp "$DIR/companion/powerzoid-claude-poller"          "$BIN_DIR/powerzoid-claude-poller"
 cp "$DIR/companion/powerzoid-claude-credits-poller"  "$BIN_DIR/powerzoid-claude-credits-poller"
+cp "$DIR/companion/powerzoid-claude-openai-poller"   "$BIN_DIR/powerzoid-claude-openai-poller"
 cp "$DIR/companion/update-claude-desktop.sh"         "$BIN_DIR/update-claude-desktop.sh"
 chmod +x "$BIN_DIR"/powerzoid-claude* "$BIN_DIR/update-claude-desktop.sh"
-ok "powerzoid-claude, powerzoid-claude-server, powerzoid-claude-poller, powerzoid-claude-credits-poller, update-claude-desktop.sh → $BIN_DIR"
+ok "powerzoid-claude, powerzoid-claude-server, powerzoid-claude-poller, powerzoid-claude-credits-poller, powerzoid-claude-openai-poller, update-claude-desktop.sh → $BIN_DIR"
 
 # PATH
 if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
@@ -62,6 +63,8 @@ cp "$DIR/companion/powerzoid-claude-poller.service"          "$SERVICE_DIR/"
 cp "$DIR/companion/powerzoid-claude-poller.timer"            "$SERVICE_DIR/"
 cp "$DIR/companion/powerzoid-claude-credits-poller.service"  "$SERVICE_DIR/"
 cp "$DIR/companion/powerzoid-claude-credits-poller.timer"    "$SERVICE_DIR/"
+cp "$DIR/companion/powerzoid-claude-openai-poller.service"   "$SERVICE_DIR/"
+cp "$DIR/companion/powerzoid-claude-openai-poller.timer"     "$SERVICE_DIR/"
 systemctl --user daemon-reload
 
 # Servidor HTTP local
@@ -80,21 +83,29 @@ systemctl --user is-active --quiet powerzoid-claude-poller.timer \
 info "Obteniendo uso actual desde claude.ai…"
 "$BIN_DIR/powerzoid-claude-poller" 2>/dev/null && ok "Datos obtenidos" || warn "No se pudieron obtener datos (abre Firefox con claude.ai primero)"
 
-# Créditos de la API (Playwright) — requiere login manual una sola vez
+# Créditos de la API de Anthropic (Playwright) — requiere login manual una sola vez
 if python3 -c "import playwright" &>/dev/null; then
     systemctl --user enable --now powerzoid-claude-credits-poller.timer 2>/dev/null || true
-    ok "Poller de créditos de API instalado (cada 30 min)"
+    ok "Poller de créditos de API (Anthropic) instalado (cada 15 min)"
     warn "Falta iniciar sesión una vez:  powerzoid-claude-credits-poller --login"
 else
-    warn "Playwright no está instalado — el poller de créditos de API no funcionará."
+    warn "Playwright no está instalado — el poller de créditos de Anthropic no funcionará."
     echo -e "     Instálalo con:"
     echo -e "       ${BOLD}pip install --user playwright${NC}"
     echo -e "       ${BOLD}python3 -m playwright install chromium${NC}"
     echo -e "     Luego: ${BOLD}systemctl --user enable --now powerzoid-claude-credits-poller.timer${NC}"
 fi
 
+# Créditos de OpenAI: el login de auth.openai.com suele bloquear navegadores
+# automatizados (Cloudflare), así que NO se habilita el timer automáticamente.
+# La vía recomendada es el userscript (Paso 2, abajo) — corre en tu sesión
+# real del navegador y no tropieza con ese bloqueo.
+info "Créditos de OpenAI: instala el userscript (Paso 2) para que se actualicen solos"
+info "  (respaldo manual: powerzoid-claude openai-credits 12.30)"
+
 # ── Resumen ───────────────────────────────────────────────────────
 USERSCRIPT="$(cd "$DIR" && pwd)/userscript/powerzoid-claude-monitor.user.js"
+OPENAI_USERSCRIPT="$(cd "$DIR" && pwd)/userscript/powerzoid-claude-openai-monitor.user.js"
 
 echo ""
 echo -e "${BOLD}══════════════════════════════════════════════════════${NC}"
@@ -105,19 +116,25 @@ echo -e "${BOLD}Paso 1:${NC} Instala Violentmonkey en tu navegador"
 echo -e "  Firefox: ${DIM}https://addons.mozilla.org/es/firefox/addon/violentmonkey/${NC}"
 echo -e "  Chrome:  ${DIM}https://chromewebstore.google.com/detail/violentmonkey/jinjaccalgkegedbjkdiaebcehnmendek${NC}"
 echo ""
-echo -e "${BOLD}Paso 2:${NC} Instala el userscript — abre esta URL en el navegador:"
-echo -e "  ${BOLD}file://${USERSCRIPT}${NC}"
-echo -e "  ${DIM}(Violentmonkey lo detecta y pregunta si instalarlo)${NC}"
+echo -e "${BOLD}Paso 2:${NC} Instala los userscripts — abre estas URLs en el navegador:"
+echo -e "  ${BOLD}file://${USERSCRIPT}${NC}          ${DIM}(uso y créditos de claude.ai)${NC}"
+echo -e "  ${BOLD}file://${OPENAI_USERSCRIPT}${NC}   ${DIM}(créditos de OpenAI)${NC}"
+echo -e "  ${DIM}(Violentmonkey los detecta y pregunta si instalarlos)${NC}"
 echo ""
 echo -e "${BOLD}Paso 3:${NC} Cierra sesión y vuelve a entrar para cargar la extensión GNOME"
 echo -e "  ${DIM}(necesario en Wayland — solo la primera vez)${NC}"
 echo ""
-echo -e "${BOLD}Paso 4:${NC} Inicia sesión una vez para ver tus créditos de la API automáticamente"
+echo -e "${BOLD}Paso 4:${NC} Inicia sesión una vez para ver tus créditos de Anthropic automáticamente"
 echo -e "  ${BOLD}powerzoid-claude-credits-poller --login${NC}"
-echo -e "  ${DIM}(abre un navegador, inicias sesión en platform.claude.com y listo — se actualiza solo cada 30 min)${NC}"
+echo -e "  ${DIM}(abre un navegador, inicias sesión y listo — se actualiza solo cada 15 min)${NC}"
 echo ""
-echo -e "${DIM}Estado:   gnome-extensions info $EXTENSION_UUID${NC}"
-echo -e "${DIM}Logs:     journalctl --user -u powerzoid-claude-server -f${NC}"
-echo -e "${DIM}Poller:   journalctl --user -u powerzoid-claude-poller -f${NC}"
-echo -e "${DIM}Créditos: journalctl --user -u powerzoid-claude-credits-poller -f${NC}"
+echo -e "${BOLD}Créditos de OpenAI:${NC} se actualizan solos abriendo platform.openai.com con el"
+echo -e "  userscript del Paso 2 instalado (auth.openai.com bloquea la automatización con"
+echo -e "  navegador headless, por eso no hay poller de systemd para esto)."
+echo -e "  Respaldo manual: ${BOLD}powerzoid-claude openai-credits 12.30${NC}"
+echo ""
+echo -e "${DIM}Estado:          gnome-extensions info $EXTENSION_UUID${NC}"
+echo -e "${DIM}Logs:            journalctl --user -u powerzoid-claude-server -f${NC}"
+echo -e "${DIM}Poller:          journalctl --user -u powerzoid-claude-poller -f${NC}"
+echo -e "${DIM}Créditos:        journalctl --user -u powerzoid-claude-credits-poller -f${NC}"
 echo ""

@@ -1,0 +1,9 @@
+[Unit]
+Description=PowerZoid Claude OpenAI Poller — consulta el saldo de créditos de la API de OpenAI
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/powerzoid-claude-openai-poller
+StandardOutput=journal
+StandardError=journal
