@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PowerZoid Claude — OpenAI Monitor
 // @namespace    https://github.com/ChristianLeal1978/powerzoid-claude
-// @version      1.0.0
+// @version      1.1.0
 // @description  Lee el saldo de créditos de OpenAI (platform.openai.com) y lo envía al servidor local para mostrarlo en GNOME Shell
 // @author       Christian Navarro
 // @match        https://platform.openai.com/*
@@ -42,10 +42,15 @@
     // ENVÍO AL SERVIDOR
     // ────────────────────────────────────────────────────────────────────
 
-    function sendToServer(balance, trigger) {
+    function sendToServer(balance, trigger, force) {
         const payload = { openai_credits_usd: balance };
         const key = JSON.stringify(payload);
-        if (key === lastPayloadKey) return;
+        // El reintento periódico ('interval') se reenvía siempre, aunque el
+        // saldo no haya cambiado: así se refresca el timestamp en el servidor
+        // y la extensión no lo marca como desactualizado mientras la pestaña
+        // siga abierta. Los demás triggers (mutation/visibility) sí deduplican
+        // para no spamear el servidor.
+        if (!force && key === lastPayloadKey) return;
         lastPayloadKey = key;
 
         dbg('send', { trigger, payload });
@@ -59,9 +64,9 @@
         });
     }
 
-    function checkAndSend(trigger) {
+    function checkAndSend(trigger, force) {
         const balance = extractCreditBalance();
-        if (balance !== null) sendToServer(balance, trigger);
+        if (balance !== null) sendToServer(balance, trigger, force);
         else dbg('check', `sin datos (${trigger})`);
     }
 
@@ -92,7 +97,7 @@
     checkAndSend('init');
 
     // 3. Reintento periódico mientras la pestaña quede abierta y quieta.
-    setInterval(() => checkAndSend('interval'), POLL_INTERVAL_MS);
+    setInterval(() => checkAndSend('interval', true), POLL_INTERVAL_MS);
 
     console.info('[PowerZoid Claude — OpenAI Monitor v1.0] Activo');
     dbg('debug', 'modo debug activado');
