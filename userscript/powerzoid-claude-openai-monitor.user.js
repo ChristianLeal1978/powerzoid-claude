@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         PowerZoid Claude — OpenAI Monitor
 // @namespace    https://github.com/ChristianLeal1978/powerzoid-claude
-// @version      1.1.0
-// @description  Lee el saldo de créditos de OpenAI (platform.openai.com) y lo envía al servidor local para mostrarlo en GNOME Shell
+// @version      1.2.0
+// @description  Lee el saldo de créditos de OpenAI (platform.openai.com) y lo envía al servidor local para mostrarlo en GNOME Shell. Recarga la pestaña sola cada cierto tiempo para no requerir abrirla a mano.
 // @author       Christian Navarro
 // @match        https://platform.openai.com/*
 // @grant        GM_xmlhttpRequest
@@ -13,9 +13,9 @@
 (function () {
     'use strict';
 
-    const SERVER_URL       = 'http://127.0.0.1:7891/update';
-    const DEBUG             = true;
-    const POLL_INTERVAL_MS  = 5 * 60 * 1000; // reintento periódico (además de los eventos)
+    const SERVER_URL        = 'http://127.0.0.1:7891/update';
+    const DEBUG              = true;
+    const RELOAD_INTERVAL_MS = 15 * 60 * 1000; // recarga la pestaña para que la SPA vuelva a pedir el saldo real
 
     let lastPayloadKey = null;
 
@@ -45,11 +45,10 @@
     function sendToServer(balance, trigger, force) {
         const payload = { openai_credits_usd: balance };
         const key = JSON.stringify(payload);
-        // El reintento periódico ('interval') se reenvía siempre, aunque el
+        // El check inicial ('init', forzado) se reenvía siempre, aunque el
         // saldo no haya cambiado: así se refresca el timestamp en el servidor
-        // y la extensión no lo marca como desactualizado mientras la pestaña
-        // siga abierta. Los demás triggers (mutation/visibility) sí deduplican
-        // para no spamear el servidor.
+        // y la extensión no lo marca como desactualizado. Los demás triggers
+        // (mutation/visibility) sí deduplican para no spamear el servidor.
         if (!force && key === lastPayloadKey) return;
         lastPayloadKey = key;
 
@@ -93,13 +92,19 @@
     });
     observer.observe(document.body, { childList: true, subtree: true, characterData: true });
 
-    // Check inicial
-    checkAndSend('init');
+    // Check inicial. Forzado: si el saldo quedó igual al de la última recarga,
+    // igual hay que reenviarlo para refrescar el timestamp en el servidor
+    // (mismo motivo que el fix de créditos de Anthropic en b23609c).
+    checkAndSend('init', true);
 
-    // 3. Reintento periódico mientras la pestaña quede abierta y quieta.
-    setInterval(() => checkAndSend('interval', true), POLL_INTERVAL_MS);
+    // 3. Recarga periódica mientras la pestaña quede abierta: a diferencia de
+    // solo reenviar el mismo valor extraído al cargar, esto hace que la SPA
+    // vuelva a pedirle el saldo al backend de OpenAI, así el monto mostrado
+    // no queda congelado en lo que había cuando se abrió la pestaña por
+    // primera vez. No requiere volver a abrir la página a mano.
+    setInterval(() => location.reload(), RELOAD_INTERVAL_MS);
 
-    console.info('[PowerZoid Claude — OpenAI Monitor v1.0] Activo');
+    console.info('[PowerZoid Claude — OpenAI Monitor v1.2.0] Activo');
     dbg('debug', 'modo debug activado');
 
 })();
