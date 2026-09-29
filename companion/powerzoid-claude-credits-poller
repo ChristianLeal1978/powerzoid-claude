@@ -80,6 +80,31 @@ def _open_context(headless: bool):
     return pw, context
 
 
+LOGIN_MARKERS = ("Continue with Google", "Continue with email", "Continue with SSO")
+
+
+def is_login_page(page) -> bool:
+    try:
+        text = page.inner_text("body")
+    except Exception:
+        return False
+    return any(m in text for m in LOGIN_MARKERS)
+
+
+def set_session_expired(expired: bool):
+    """Marca en usage.json si la sesión de la consola expiró (lo lee la extensión)."""
+    if not USAGE_FILE.exists():
+        return
+    try:
+        data = json.loads(USAGE_FILE.read_text())
+    except Exception:
+        return
+    if data.get("api_credits_session_expired") == expired:
+        return
+    data["api_credits_session_expired"] = expired
+    USAGE_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+
+
 def extract_credits(page) -> float | None:
     try:
         page.wait_for_load_state("networkidle", timeout=15000)
@@ -109,6 +134,7 @@ def save_credits(amount: float):
     data["api_credits_updated_at"]     = now.strftime("%H:%M  %d/%m/%Y")
     data["api_credits_updated_at_iso"] = now.isoformat()
     data["api_credits_source"]         = "console-poller"
+    data["api_credits_session_expired"] = False
     USAGE_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False))
 
 
@@ -142,9 +168,12 @@ def run_once(headless: bool) -> bool:
     page = context.pages[0] if context.pages else context.new_page()
 
     credits = None
+    expired = False
     try:
         page.goto(DASHBOARD_URL, timeout=30000)
         credits = extract_credits(page)
+        if credits is None:
+            expired = is_login_page(page)
     except Exception as e:
         log(f"Error al cargar el Dashboard: {e}", R)
     finally:
@@ -152,6 +181,9 @@ def run_once(headless: bool) -> bool:
         pw.stop()
 
     if credits is None:
+        if expired:
+            set_session_expired(True)
+            log("La sesión de platform.claude.com expiró.", R)
         log("No se pudo leer el saldo.", R)
         log("Si la sesión expiró, vuelve a correr: powerzoid-claude-credits-poller --login", Y)
         return False

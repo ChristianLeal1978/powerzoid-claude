@@ -458,9 +458,10 @@ class ClaudeIndicator extends PanelMenu.Button {
         for (const check of STALE_CHECKS) {
             const present  = d[check.presenceField] !== undefined && d[check.presenceField] !== null;
             const iso      = d[check.isoField];
-            let   isStale  = false;
+            const expired  = check.key === 'apiCredits' && d.api_credits_session_expired === true;
+            let   isStale  = expired;
 
-            if (present && iso) {
+            if (!expired && present && iso) {
                 const ts = Date.parse(iso);
                 if (!Number.isNaN(ts)) {
                     const ageMin = (Date.now() - ts) / 60000;
@@ -475,9 +476,11 @@ class ClaudeIndicator extends PanelMenu.Button {
                 this._staleNotified[check.key] = true;
                 log(`[PowerZoid Claude] Aviso de datos desactualizados: ${check.key} (hace ${this._formatAge(iso)})`);
                 this._notify(
-                    'Datos desactualizados',
-                    `${check.label} lleva más de ${check.thresholdMin} min sin refrescarse ` +
-                    `(hace ${this._formatAge(iso)}).\n${check.hint}`,
+                    expired ? 'Sesión expirada' : 'Datos desactualizados',
+                    expired
+                        ? `${check.label}: la sesión de platform.claude.com expiró.\n${check.hint}`
+                        : `${check.label} lleva más de ${check.thresholdMin} min sin refrescarse ` +
+                          `(hace ${this._formatAge(iso)}).\n${check.hint}`,
                     'dialog-warning-symbolic'
                 );
             } else if (!isStale) {
