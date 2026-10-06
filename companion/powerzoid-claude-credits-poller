@@ -71,6 +71,11 @@ def _open_context(headless: bool):
             str(PROFILE_DIR),
             headless=headless,
             viewport={"width": 1280, "height": 900},
+            # Sin las marcas de automatización (navigator.webdriver, barra
+            # "controlado por software automatizado"): el login de Anthropic
+            # rechaza el código enviado por correo si las detecta.
+            ignore_default_args=["--enable-automation"],
+            args=["--disable-blink-features=AutomationControlled"],
         )
     except Exception as e:
         pw.stop()
@@ -150,7 +155,12 @@ def cmd_login():
     except (EOFError, KeyboardInterrupt):
         pass
 
-    credits = extract_credits(page)
+    try:
+        credits = extract_credits(page)
+    except Exception:
+        credits = None
+        log("Se cerró la ventana del navegador antes de presionar Enter.", R)
+        log("Deja la ventana abierta en el Dashboard y presiona Enter aquí.", Y)
     if credits is not None:
         save_credits(credits)
         log(f"✓ Saldo detectado y guardado: ${credits:.2f}", G)
@@ -158,7 +168,10 @@ def cmd_login():
         log("No se pudo detectar el saldo todavía.", R)
         log("Verifica que la página muestre la tarjeta 'Organization credits' y reintenta.", Y)
 
-    context.close()
+    try:
+        context.close()
+    except Exception:
+        pass
     pw.stop()
     sys.exit(0 if credits is not None else 1)
 
