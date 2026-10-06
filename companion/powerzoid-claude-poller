@@ -11,7 +11,7 @@ Uso:
     powerzoid-claude-poller --debug   # vuelca respuestas de la API
 """
 
-import glob, json, os, shutil, sqlite3, subprocess
+import glob, hashlib, json, os, shutil, sqlite3, subprocess
 import sys, tempfile, time, urllib.request, urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
@@ -54,9 +54,11 @@ BROWSERS = [
             "~/.var/app/com.vivaldi.Vivaldi/config/vivaldi/Default/Cookies",       # Flatpak
             "~/.var/app/com.vivaldi.Vivaldi/config/vivaldi/Profile */Cookies",     # Flatpak
         ],
-        # Vivaldi nativo usa "Vivaldi Safe Storage"; la versión Flatpak
-        # registra la clave en el keyring bajo el nombre del sandbox portal.
-        "keyring" : ["Vivaldi Safe Storage", "Application key for com.vivaldi.Vivaldi"],
+        # Vivaldi nativo guarda su clave como "Chrome Safe Storage"; la versión
+        # Flatpak la registra bajo el nombre del sandbox portal. Se prueban
+        # todas y pick_chrome_key() se queda con la que descifra.
+        "keyring" : ["Chrome Safe Storage", "Vivaldi Safe Storage",
+                      "Application key for com.vivaldi.Vivaldi"],
     },
     {
         "name"    : "Chrome",
@@ -155,30 +157,96 @@ def get_firefox_cookies(db_paths: list, domain: str) -> tuple[dict, float]:
 #  LECTURA DE COOKIES — CHROME / VIVALDI / CHROMIUM
 # ══════════════════════════════════════════════════════════════════════════════
 
-def get_chrome_key(keyring_label) -> bytes:
+def get_chrome_keys(keyring_label) -> list[bytes]:
     """
-    Obtiene la clave de cifrado desde GNOME Keyring.
-    Acepta una etiqueta única o una lista de etiquetas candidatas (algunas
-    apps empaquetadas como Flatpak registran la clave con otro nombre).
-    Si no está disponible, usa la clave por defecto de Chromium en Linux.
+    Obtiene las claves de cifrado candidatas desde GNOME Keyring, en el orden
+    de las etiquetas dadas (una o varias: Vivaldi nativo usa "Chrome Safe
+    Storage", y la versión Flatpak registra la clave con otro nombre).
+    Siempre incluye al final la clave por defecto de Chromium en Linux.
     """
     labels = [keyring_label] if isinstance(keyring_label, str) else list(keyring_label)
+    keys   = []
     try:
         import secretstorage
         bus        = secretstorage.dbus_init()
         collection = secretstorage.get_default_collection(bus)
         if collection.is_locked():
             collection.unlock()
-        for item in collection.get_all_items():
-            if item.get_label() in labels:
-                return item.get_secret()
+        items = collection.get_all_items()
+        for label in labels:
+            for item in items:
+                if item.get_label() == label:
+                    secret = item.get_secret()
+                    if secret not in keys:
+                        keys.append(secret)
     except Exception:
         pass
     # Clave por defecto cuando no hay keyring configurado
-    return b"peanuts"
+    keys.append(b"peanuts")
+    return keys
 
 
-def decrypt_chrome_cookie(encrypted: bytes, key: bytes) -> str:
+def _aes_decrypt(encrypted: bytes, key: bytes) -> bytes | None:
+    """
+    Descifra un valor v10/v11 de Chromium (AES-128-CBC) y quita el padding.
+    Devuelve None si la clave no corresponde (padding inválido).
+    """
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+    from cryptography.hazmat.primitives             import hashes
+    from cryptography.hazmat.primitives.ciphers    import Cipher, algorithms, modes
+    from cryptography.hazmat.backends              import default_backend
+
+    payload = encrypted[3:]   # quitar prefijo v10/v11
+
+    # Derivar clave AES-128 con PBKDF2 (1 iteración, salt fijo de Chromium)
+    kdf = PBKDF2HMAC(
+        algorithm  = hashes.SHA1(),
+        length     = 16,
+        salt       = b"saltysalt",
+        iterations = 1,
+        backend    = default_backend(),
+    )
+    aes_key = kdf.derive(key)
+    iv      = b" " * 16   # IV fijo de Chromium
+
+    cipher    = Cipher(algorithms.AES(aes_key), modes.CBC(iv),
+                       backend=default_backend())
+    decryptor = cipher.decryptor()
+    decrypted = decryptor.update(payload) + decryptor.finalize()
+
+    # Quitar padding PKCS5
+    pad = decrypted[-1]
+    if not 1 <= pad <= 16 or decrypted[-pad:] != bytes([pad]) * pad:
+        return None
+    return decrypted[:-pad]
+
+
+def _is_encrypted(value: bytes) -> bool:
+    return value.startswith(b"v10") or value.startswith(b"v11")
+
+
+def pick_chrome_key(keys: list[bytes], rows: list) -> bytes:
+    """
+    Elige la clave que descifra las cookies de esta base de datos.
+    Desde la versión 24 del esquema, cada valor descifrado empieza con el
+    SHA-256 del host_key, lo que permite verificar la clave sin ambigüedad.
+    """
+    try:
+        for host_key, enc in rows:
+            if not _is_encrypted(enc):
+                continue
+            digest = hashlib.sha256(host_key.encode()).digest()
+            for key in keys:
+                plain = _aes_decrypt(enc, key)
+                if plain is not None and plain[:32] == digest:
+                    return key
+            break
+    except ImportError:
+        pass
+    return keys[0]
+
+
+def decrypt_chrome_cookie(encrypted: bytes, key: bytes, host_key: str = "") -> str:
     """
     Descifra un valor de cookie de Chromium (formato v10/v11, AES-128-CBC).
     Requiere el paquete 'cryptography' (python3-cryptography en Fedora).
@@ -187,39 +255,20 @@ def decrypt_chrome_cookie(encrypted: bytes, key: bytes) -> str:
         return ""
 
     # Sin cifrar (cookies antiguas o de sesión sin cifrar)
-    if not (encrypted.startswith(b"v10") or encrypted.startswith(b"v11")):
+    if not _is_encrypted(encrypted):
         try:
             return encrypted.decode("utf-8")
         except Exception:
             return ""
 
     try:
-        from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-        from cryptography.hazmat.primitives             import hashes
-        from cryptography.hazmat.primitives.ciphers    import Cipher, algorithms, modes
-        from cryptography.hazmat.backends              import default_backend
-
-        payload = encrypted[3:]   # quitar prefijo v10/v11
-
-        # Derivar clave AES-128 con PBKDF2 (1 iteración, salt fijo de Chromium)
-        kdf = PBKDF2HMAC(
-            algorithm  = hashes.SHA1(),
-            length     = 16,
-            salt       = b"saltysalt",
-            iterations = 1,
-            backend    = default_backend(),
-        )
-        aes_key = kdf.derive(key)
-        iv      = b" " * 16   # IV fijo de Chromium
-
-        cipher    = Cipher(algorithms.AES(aes_key), modes.CBC(iv),
-                           backend=default_backend())
-        decryptor = cipher.decryptor()
-        decrypted = decryptor.update(payload) + decryptor.finalize()
-
-        # Quitar padding PKCS5
-        pad = decrypted[-1]
-        return decrypted[:-pad].decode("utf-8")
+        decrypted = _aes_decrypt(encrypted, key)
+        if decrypted is None:
+            raise ValueError("clave incorrecta")
+        # Esquema v24+: el valor va precedido del SHA-256 del host_key
+        if host_key and decrypted[:32] == hashlib.sha256(host_key.encode()).digest():
+            decrypted = decrypted[32:]
+        return decrypted.decode("utf-8")
 
     except ImportError:
         log("'cryptography' no instalado — omitiendo cookies cifradas de Chrome.", Y)
@@ -244,7 +293,7 @@ def get_chrome_cookies(db_paths: list, keyring_label: str,
     Lee y descifra cookies de Chrome/Vivaldi/Chromium.
     Devuelve (cookies_dict, last_access_unix_timestamp).
     """
-    aes_key     = get_chrome_key(keyring_label)
+    keys        = get_chrome_keys(keyring_label)
     cookies     = {}
     last_access = 0.0
 
@@ -260,14 +309,16 @@ def get_chrome_cookies(db_paths: list, keyring_label: str,
             conn = sqlite3.connect(tmp)
             cur  = conn.cursor()
             cur.execute("""
-                SELECT name, encrypted_value, last_access_utc
+                SELECT host_key, name, encrypted_value, last_access_utc
                 FROM   cookies
                 WHERE  host_key LIKE ?
                 ORDER  BY last_access_utc DESC
             """, (f"%{domain}%",))
 
-            for name, enc_value, access_utc in cur.fetchall():
-                value = decrypt_chrome_cookie(enc_value, aes_key)
+            rows    = cur.fetchall()
+            aes_key = pick_chrome_key(keys, [(r[0], r[2]) for r in rows])
+            for host_key, name, enc_value, access_utc in rows:
+                value = decrypt_chrome_cookie(enc_value, aes_key, host_key)
                 if value and name not in cookies:
                     cookies[name] = value
                 ts_unix = chrome_ts_to_unix(access_utc)

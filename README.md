@@ -107,8 +107,11 @@ journalctl --user -u powerzoid-claude-credits-poller -f   # ver logs
 powerzoid-claude-credits-poller                            # forzar una consulta ahora
 ```
 
-Si la sesión expira (cookies vencidas), el poller lo indica en el log — vuelve a correr
-`--login` y sigue automático.
+Si la sesión expira (cookies vencidas), el poller intenta recuperarla solo: importa las
+cookies de `platform.claude.com` de tu navegador normal (Vivaldi, Chrome o Firefox) si
+tienes la sesión iniciada ahí. Si tampoco hay sesión en el navegador, lo indica en el log
+y en la extensión — vuelve a correr `--login` (o inicia sesión en tu navegador) y sigue
+automático.
 
 El saldo aparece como una línea en el menú desplegable de la extensión y en `powerzoid-claude status`.
 

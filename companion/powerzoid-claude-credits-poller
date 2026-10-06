@@ -176,6 +176,35 @@ def cmd_login():
     sys.exit(0 if credits is not None else 1)
 
 
+CONSOLE_HOST = "platform.claude.com"
+
+
+def browser_cookies() -> list[dict]:
+    """
+    Lee las cookies de platform.claude.com del navegador normal del usuario
+    (Vivaldi/Chrome/Firefox) con el lector de powerzoid-claude-poller, que se
+    instala junto a este script. Sirve para recuperar la sesión sin --login.
+    """
+    import importlib.machinery, importlib.util
+    path = Path(__file__).resolve().parent / "powerzoid-claude-poller"
+    if not path.exists():
+        return []
+    try:
+        loader = importlib.machinery.SourceFileLoader("pz_poller", str(path))
+        spec   = importlib.util.spec_from_loader("pz_poller", loader)
+        module = importlib.util.module_from_spec(spec)
+        loader.exec_module(module)
+        cookies, browser = module.find_best_cookies(CONSOLE_HOST)
+    except Exception as e:
+        log(f"No se pudieron leer cookies del navegador: {e}", Y)
+        return []
+    if "sessionKey" not in cookies:
+        return []
+    log(f"Importando la sesión de {CONSOLE_HOST} desde {browser}", Y)
+    return [{"name": k, "value": v, "url": f"https://{CONSOLE_HOST}"}
+            for k, v in cookies.items()]
+
+
 def run_once(headless: bool) -> bool:
     pw, context = _open_context(headless=headless)
     page = context.pages[0] if context.pages else context.new_page()
@@ -185,8 +214,16 @@ def run_once(headless: bool) -> bool:
     try:
         page.goto(DASHBOARD_URL, timeout=30000)
         credits = extract_credits(page)
-        if credits is None:
-            expired = is_login_page(page)
+        if credits is None and is_login_page(page):
+            # La sesión del perfil expiró: intentar con la del navegador normal.
+            # Si funciona, las cookies quedan guardadas en el perfil persistente.
+            cookies = browser_cookies()
+            if cookies:
+                context.add_cookies(cookies)
+                page.goto(DASHBOARD_URL, timeout=30000)
+                credits = extract_credits(page)
+            if credits is None:
+                expired = is_login_page(page)
     except Exception as e:
         log(f"Error al cargar el Dashboard: {e}", R)
     finally:
@@ -198,7 +235,8 @@ def run_once(headless: bool) -> bool:
             set_session_expired(True)
             log("La sesión de platform.claude.com expiró.", R)
         log("No se pudo leer el saldo.", R)
-        log("Si la sesión expiró, vuelve a correr: powerzoid-claude-credits-poller --login", Y)
+        log("Si la sesión expiró, inicia sesión en platform.claude.com en tu navegador", Y)
+        log("o vuelve a correr: powerzoid-claude-credits-poller --login", Y)
         return False
 
     save_credits(credits)
