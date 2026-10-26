@@ -1,0 +1,16 @@
+[Unit]
+Description=PowerZoid Claude OpenAI Browser — mini navegador que mantiene al día el saldo de OpenAI
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/powerzoid-claude-openai-browser --hidden
+Restart=on-failure
+RestartSec=10
+Environment="PYTHONUNBUFFERED=1"
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=graphical-session.target

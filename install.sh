@@ -45,9 +45,10 @@ cp "$DIR/companion/powerzoid-claude-server"          "$BIN_DIR/powerzoid-claude-
 cp "$DIR/companion/powerzoid-claude-poller"          "$BIN_DIR/powerzoid-claude-poller"
 cp "$DIR/companion/powerzoid-claude-credits-poller"  "$BIN_DIR/powerzoid-claude-credits-poller"
 cp "$DIR/companion/powerzoid-claude-openai-poller"   "$BIN_DIR/powerzoid-claude-openai-poller"
+cp "$DIR/companion/powerzoid-claude-openai-browser"  "$BIN_DIR/powerzoid-claude-openai-browser"
 cp "$DIR/companion/update-claude-desktop.sh"         "$BIN_DIR/update-claude-desktop.sh"
 chmod +x "$BIN_DIR"/powerzoid-claude* "$BIN_DIR/update-claude-desktop.sh"
-ok "powerzoid-claude, powerzoid-claude-server, powerzoid-claude-poller, powerzoid-claude-credits-poller, powerzoid-claude-openai-poller, update-claude-desktop.sh → $BIN_DIR"
+ok "powerzoid-claude, powerzoid-claude-server, powerzoid-claude-poller, powerzoid-claude-credits-poller, powerzoid-claude-openai-poller, powerzoid-claude-openai-browser, update-claude-desktop.sh → $BIN_DIR"
 
 # PATH
 if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
@@ -65,6 +66,7 @@ cp "$DIR/companion/powerzoid-claude-credits-poller.service"  "$SERVICE_DIR/"
 cp "$DIR/companion/powerzoid-claude-credits-poller.timer"    "$SERVICE_DIR/"
 cp "$DIR/companion/powerzoid-claude-openai-poller.service"   "$SERVICE_DIR/"
 cp "$DIR/companion/powerzoid-claude-openai-poller.timer"     "$SERVICE_DIR/"
+cp "$DIR/companion/powerzoid-claude-openai-browser.service"  "$SERVICE_DIR/"
 systemctl --user daemon-reload
 
 # Servidor HTTP local
@@ -96,12 +98,18 @@ else
     echo -e "     Luego: ${BOLD}systemctl --user enable --now powerzoid-claude-credits-poller.timer${NC}"
 fi
 
-# Créditos de OpenAI: el login de auth.openai.com suele bloquear navegadores
-# automatizados (Cloudflare), así que NO se habilita el timer automáticamente.
-# La vía recomendada es el userscript (Paso 2, abajo) — corre en tu sesión
-# real del navegador y no tropieza con ese bloqueo.
-info "Créditos de OpenAI: instala el userscript (Paso 2) para que se actualicen solos"
-info "  (respaldo manual: powerzoid-claude openai-credits 12.30)"
+# Créditos de OpenAI: mini navegador WebKitGTK propio (sin Playwright, así que
+# el login de auth.openai.com no lo bloquea). Corre oculto con la sesión gráfica
+# y recarga el Billing overview cada 10 min.
+if python3 -c "import gi; gi.require_version('WebKit','6.0')" &>/dev/null; then
+    systemctl --user enable --now powerzoid-claude-openai-browser.service 2>/dev/null || true
+    ok "Navegador de créditos de OpenAI activo (recarga cada 10 min)"
+    info "Si no has iniciado sesión, se abrirá su ventana: entra una vez y listo"
+else
+    warn "Falta WebKitGTK 6.0 — el navegador de créditos de OpenAI no funcionará."
+    echo -e "     Instálalo con: ${BOLD}sudo dnf install webkitgtk6.0${NC}"
+    info "Alternativas: userscript (Paso 2) o manual: powerzoid-claude openai-credits 12.30"
+fi
 
 # ── Resumen ───────────────────────────────────────────────────────
 USERSCRIPT="$(cd "$DIR" && pwd)/userscript/powerzoid-claude-monitor.user.js"
@@ -128,13 +136,14 @@ echo -e "${BOLD}Paso 4:${NC} Inicia sesión una vez para ver tus créditos de An
 echo -e "  ${BOLD}powerzoid-claude-credits-poller --login${NC}"
 echo -e "  ${DIM}(abre un navegador, inicias sesión y listo — se actualiza solo cada 15 min)${NC}"
 echo ""
-echo -e "${BOLD}Créditos de OpenAI:${NC} se actualizan solos abriendo platform.openai.com con el"
-echo -e "  userscript del Paso 2 instalado (auth.openai.com bloquea la automatización con"
-echo -e "  navegador headless, por eso no hay poller de systemd para esto)."
+echo -e "${BOLD}Créditos de OpenAI:${NC} inicia sesión una vez en la ventana del mini navegador"
+echo -e "  (menú de la extensión → ${BOLD}🔷 Mostrar navegador OpenAI${NC}, o ${BOLD}powerzoid-claude-openai-browser${NC})."
+echo -e "  Cerrar la ventana solo la oculta; sigue recargando sola cada 10 min."
 echo -e "  Respaldo manual: ${BOLD}powerzoid-claude openai-credits 12.30${NC}"
 echo ""
 echo -e "${DIM}Estado:          gnome-extensions info $EXTENSION_UUID${NC}"
 echo -e "${DIM}Logs:            journalctl --user -u powerzoid-claude-server -f${NC}"
 echo -e "${DIM}Poller:          journalctl --user -u powerzoid-claude-poller -f${NC}"
 echo -e "${DIM}Créditos:        journalctl --user -u powerzoid-claude-credits-poller -f${NC}"
+echo -e "${DIM}OpenAI:          journalctl --user -u powerzoid-claude-openai-browser -f${NC}"
 echo ""

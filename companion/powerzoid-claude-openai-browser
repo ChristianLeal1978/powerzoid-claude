@@ -1,0 +1,311 @@
+#!/usr/bin/env python3
+"""
+powerzoid-claude-openai-browser — Mini navegador (GTK4 + WebKitGTK) dedicado al
+Billing overview de platform.openai.com. Inicias sesión una vez y él solo
+recarga la página cada RELOAD_MINUTES, lee el "Credit balance" y lo guarda en
+~/.local/share/powerzoid-claude/usage.json para la extensión GNOME.
+
+A diferencia del userscript, no depende de una pestaña de Vivaldi (que el
+navegador congela al quedar en segundo plano), y a diferencia de
+powerzoid-claude-openai-poller no usa Playwright: WebKitGTK es un navegador
+normal, sin marcas de automatización, así que el login de auth.openai.com
+no lo bloquea.
+
+Uso:
+    powerzoid-claude-openai-browser            # muestra la ventana
+    powerzoid-claude-openai-browser --hidden   # arranca oculto (servicio systemd)
+
+Es de instancia única: si ya está corriendo (p. ej. como servicio), volver a
+ejecutarlo sin --hidden solo trae la ventana al frente.
+
+Atajos: F5 / Ctrl+R recarga · Alt+Inicio vuelve al saldo · Ctrl+Q cierra del todo.
+Cerrar la ventana solo la oculta: sigue recargando en segundo plano.
+
+La sesión (cookies) queda en un perfil propio:
+    ~/.local/share/powerzoid-claude/webview-openai
+"""
+
+import json
+import os
+import subprocess
+import sys
+from datetime import datetime
+from pathlib import Path
+
+import gi
+gi.require_version("Gtk", "4.0")
+gi.require_version("WebKit", "6.0")
+from gi.repository import Gio, GLib, Gtk, WebKit  # noqa: E402
+
+APP_ID         = "cl.cleal.PowerZoidOpenAI"
+BILLING_URL    = "https://platform.openai.com/settings/organization/billing/overview"
+RELOAD_MINUTES = 10
+# Tras cargar la página, el saldo llega por fetch asíncrono de la SPA:
+# se reintenta la lectura cada EXTRACT_STEP_S hasta EXTRACT_TRIES veces.
+EXTRACT_STEP_S = 2
+EXTRACT_TRIES  = 30
+EXTRACT_TRIES_OTHER = 5
+
+USAGE_DIR   = Path.home() / ".local" / "share" / "powerzoid-claude"
+USAGE_FILE  = USAGE_DIR / "usage.json"
+PROFILE_DIR = USAGE_DIR / "webview-openai"
+CACHE_DIR   = Path.home() / ".cache" / "powerzoid-claude" / "webview-openai"
+
+# Mismo criterio que el userscript: "$XX.XX" después de "Credit balance"
+# en el texto de la página, sin depender de la estructura del DOM.
+EXTRACT_JS = r"""
+(() => {
+    // textContent y no innerText: con la ventana oculta el viewport mide 0x0
+    // y innerText omite casi todo, aunque el saldo sí esté en el DOM.
+    const text = document.body ? document.body.textContent : '';
+    const m = text.match(/Credit balance[\s\S]{0,200}?\$([\d,]+\.\d{2})/i);
+    return m ? m[1].replace(/,/g, '') : '';
+})()
+"""
+
+DEBUG = bool(os.environ.get("POWERZOID_DEBUG"))
+
+LOGIN_HOSTS = ("auth.openai.com", "auth0.openai.com")
+
+
+def ts():
+    return datetime.now().strftime("%H:%M:%S")
+
+
+def log(msg):
+    print(f"[{ts()}] {msg}", flush=True)
+
+
+def dbg(msg):
+    if DEBUG:
+        log(f"[debug] {msg}")
+
+
+def save_credits(amount: float):
+    USAGE_DIR.mkdir(parents=True, exist_ok=True)
+    data = {}
+    if USAGE_FILE.exists():
+        try:
+            data = json.loads(USAGE_FILE.read_text())
+        except Exception:
+            pass
+    now = datetime.now().astimezone()
+    data["openai_credits_usd"]            = round(amount, 2)
+    data["openai_credits_updated_at"]     = now.strftime("%H:%M  %d/%m/%Y")
+    data["openai_credits_updated_at_iso"] = now.isoformat()
+    data["openai_credits_source"]         = "openai-browser"
+    # Escritura atómica: la extensión vigila el archivo y no debe leerlo a medias.
+    tmp = USAGE_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(USAGE_FILE)
+
+
+def notify(title, body):
+    try:
+        subprocess.Popen(["notify-send", "-a", "PowerZoid Claude",
+                          "-i", "dialog-warning-symbolic", title, body])
+    except OSError:
+        pass
+
+
+def is_login_uri(uri: str) -> bool:
+    host = GLib.Uri.parse(uri, GLib.UriFlags.NONE).get_host() if uri else ""
+    return host in LOGIN_HOSTS or "/login" in (uri or "")
+
+
+class BrowserWindow(Gtk.ApplicationWindow):
+
+    def __init__(self, app):
+        super().__init__(application=app, title="OpenAI — Créditos")
+        self.set_default_size(1100, 800)
+
+        self._extract_source = None
+        self._extract_tries  = 0
+        self._login_notified = False
+        self._last_amount    = None
+        self._last_time      = None
+
+        PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        session = WebKit.NetworkSession.new(str(PROFILE_DIR), str(CACHE_DIR))
+        session.get_cookie_manager().set_persistent_storage(
+            str(PROFILE_DIR / "cookies.sqlite"), WebKit.CookiePersistentStorage.SQLITE)
+        session.get_cookie_manager().set_accept_policy(WebKit.CookieAcceptPolicy.NO_THIRD_PARTY)
+
+        self.webview = WebKit.WebView(network_session=session)
+        self.webview.connect("load-changed", self._on_load_changed)
+        self.webview.connect("create", self._on_create_popup)
+        self.webview.connect("notify::uri", self._on_uri_changed)
+        self.set_child(self.webview)
+
+        header = Gtk.HeaderBar()
+        home_btn = Gtk.Button(icon_name="go-home-symbolic", tooltip_text="Ir al saldo (Alt+Inicio)")
+        home_btn.connect("clicked", lambda *_: self.go_billing())
+        reload_btn = Gtk.Button(icon_name="view-refresh-symbolic", tooltip_text="Recargar (F5)")
+        reload_btn.connect("clicked", lambda *_: self.webview.reload())
+        header.pack_start(home_btn)
+        header.pack_start(reload_btn)
+        self._status = Gtk.Label(css_classes=["dim-label"])
+        header.pack_end(self._status)
+        self.set_titlebar(header)
+
+        # Cerrar = ocultar: la recarga periódica sigue en segundo plano.
+        self.connect("close-request", lambda *_: (self.set_visible(False), True)[1])
+
+        GLib.timeout_add_seconds(RELOAD_MINUTES * 60, self._on_reload_timer)
+        self.go_billing()
+        self._update_status()
+
+    # ── Navegación ────────────────────────────────────────────────────────
+    def _on_create_popup(self, webview, _action):
+        # Ventanas emergentes (login con Google/Microsoft/Apple): se abren en
+        # una ventana aparte que comparte sesión con la principal.
+        popup = WebKit.WebView(related_view=webview)
+        win = Gtk.Window(transient_for=self, default_width=600, default_height=720)
+        win.set_child(popup)
+        popup.connect("ready-to-show", lambda *_: win.present())
+        popup.connect("close", lambda *_: win.destroy())
+        return popup
+
+    def go_billing(self):
+        self.webview.load_uri(BILLING_URL)
+
+    def _on_reload_timer(self):
+        uri = self.webview.get_uri() or ""
+        # Si estás usando la ventana (p. ej. a mitad del login, o mirando otra
+        # sección) no se te interrumpe; se reintenta en el próximo ciclo.
+        if self.get_visible() and not uri.startswith(BILLING_URL):
+            log("Recarga omitida: la ventana está en uso en otra página")
+        else:
+            log("Recarga periódica")
+            self.go_billing()
+        return GLib.SOURCE_CONTINUE
+
+    # ── Lectura del saldo ─────────────────────────────────────────────────
+    def _on_load_changed(self, webview, event):
+        dbg(f"load-changed {event.value_nick} {webview.get_uri()}")
+        if event != WebKit.LoadEvent.FINISHED:
+            return
+        uri = webview.get_uri() or ""
+        if is_login_uri(uri):
+            self._on_login_required()
+            return
+        # Ojo: durante el login se pasa por hosts de terceros (Google, Apple,
+        # Microsoft) y por callbacks de platform.openai.com; no hay que navegar
+        # desde aquí o se corta el flujo. Solo se intenta leer el saldo.
+        self._schedule_extract()
+
+    def _on_uri_changed(self, webview, _pspec):
+        self._update_status()
+        # La SPA navega con pushState (p. ej. del callback del login al
+        # Billing overview) sin disparar load-changed: se relee el saldo igual.
+        uri = webview.get_uri() or ""
+        if uri.startswith("https://platform.openai.com") and not is_login_uri(uri) \
+                and not webview.is_loading():
+            self._schedule_extract()
+
+    def _schedule_extract(self):
+        self._cancel_extract()
+        self._extract_tries = 0
+        self._extract_source = GLib.timeout_add_seconds(EXTRACT_STEP_S, self._try_extract)
+
+    def _cancel_extract(self):
+        if self._extract_source:
+            GLib.source_remove(self._extract_source)
+            self._extract_source = None
+
+    def _try_extract(self):
+        self._extract_tries += 1
+        dbg(f"lectura #{self._extract_tries} en {self.webview.get_uri()}")
+        self.webview.evaluate_javascript(EXTRACT_JS, -1, None, None, None, self._on_extracted)
+        return GLib.SOURCE_REMOVE
+
+    def _on_extracted(self, webview, result):
+        self._extract_source = None
+        value = ""
+        try:
+            value = webview.evaluate_javascript_finish(result).to_string()
+        except GLib.Error as e:
+            log(f"Error al evaluar JS: {e.message}")
+
+        if value:
+            amount = float(value)
+            save_credits(amount)
+            self._last_amount = amount
+            self._last_time   = datetime.now()
+            self._login_notified = False
+            log(f"Saldo guardado: ${amount:.2f}")
+            self._update_status()
+            return
+
+        uri = webview.get_uri() or ""
+        on_platform = uri.startswith("https://platform.openai.com")
+        on_billing  = uri.startswith(BILLING_URL)
+        # Fuera del Billing overview el saldo puede no aparecer nunca: se
+        # insiste menos antes de rendirse.
+        max_tries = EXTRACT_TRIES if on_billing else EXTRACT_TRIES_OTHER
+        if is_login_uri(uri):
+            self._on_login_required()
+        elif on_platform and self._extract_tries < max_tries:
+            self._extract_source = GLib.timeout_add_seconds(EXTRACT_STEP_S, self._try_extract)
+        elif on_platform and not on_billing and self._login_notified:
+            # Login recién completado y la página asentada (p. ej. /home sin
+            # la tarjeta de saldo): ahora sí es seguro ir al Billing overview.
+            log("Login completado, yendo al saldo")
+            self._login_notified = False
+            self.go_billing()
+        else:
+            log(f"No se encontró 'Credit balance' en {uri}")
+
+    def _on_login_required(self):
+        self._update_status()
+        if not self._login_notified:
+            self._login_notified = True
+            log("La sesión expiró: se requiere iniciar sesión")
+            notify("Créditos de OpenAI: inicia sesión",
+                   "La sesión del navegador de OpenAI expiró. Se abrió la ventana para que vuelvas a entrar.")
+        self.present()
+
+    def _update_status(self):
+        if is_login_uri(self.webview.get_uri() or ""):
+            text = "Sesión requerida"
+        elif self._last_amount is not None:
+            text = f"${self._last_amount:.2f} · {self._last_time:%H:%M}"
+        else:
+            text = "Esperando saldo…"
+        self._status.set_text(f"{text} · recarga cada {RELOAD_MINUTES} min")
+
+
+class BrowserApp(Gtk.Application):
+
+    def __init__(self):
+        super().__init__(application_id=APP_ID,
+                         flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
+        self.window = None
+
+    def do_startup(self):
+        Gtk.Application.do_startup(self)
+        # La app vive aunque la ventana esté oculta.
+        self.hold()
+        for name, accels, cb in (
+            ("reload", ["F5", "<Control>r"], lambda *_: self.window.webview.reload()),
+            ("home",   ["<Alt>Home"],        lambda *_: self.window.go_billing()),
+            ("quit",   ["<Control>q"],       lambda *_: self.quit()),
+        ):
+            action = Gio.SimpleAction.new(name, None)
+            action.connect("activate", cb)
+            self.add_action(action)
+            self.set_accels_for_action(f"app.{name}", accels)
+
+    def do_command_line(self, cmdline):
+        args = cmdline.get_arguments()[1:]
+        if self.window is None:
+            self.window = BrowserWindow(self)
+            log(f"Iniciado (recarga cada {RELOAD_MINUTES} min)")
+        if "--hidden" not in args:
+            self.window.present()
+        return 0
+
+
+if __name__ == "__main__":
+    sys.exit(BrowserApp().run(sys.argv))

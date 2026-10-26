@@ -41,6 +41,7 @@ const ICON_MED          = '🟡';
 const ICON_HIGH         = '🔴';
 
 const DESKTOP_UPDATE_SCRIPT_PARTS = ['.local', 'bin', 'update-claude-desktop.sh'];
+const OPENAI_BROWSER_PARTS        = ['.local', 'bin', 'powerzoid-claude-openai-browser'];
 
 const VALID_ALIGNS   = ['left', 'center', 'right'];
 const DEFAULT_FONT_SIZE = 12;
@@ -80,7 +81,7 @@ const STALE_CHECKS = [
     {
         key: 'openaiCredits', isoField: 'openai_credits_updated_at_iso', presenceField: 'openai_credits_usd',
         thresholdMin: 45, label: 'Créditos de OpenAI (🔷)',
-        hint: 'Abre platform.openai.com (el userscript lo refresca solo) o actualízalo a mano: powerzoid-claude openai-credits <monto>',
+        hint: 'Abre el menú → 🔷 Mostrar navegador OpenAI y revisa si pide iniciar sesión (o: powerzoid-claude openai-credits <monto>)',
     },
 ];
 
@@ -95,6 +96,10 @@ function usageDirPath() {
 
 function desktopUpdateScriptPath() {
     return GLib.build_filenamev([GLib.get_home_dir(), ...DESKTOP_UPDATE_SCRIPT_PARTS]);
+}
+
+function openaiBrowserPath() {
+    return GLib.build_filenamev([GLib.get_home_dir(), ...OPENAI_BROWSER_PARTS]);
 }
 
 function configDirPath() {
@@ -264,6 +269,19 @@ class ClaudeIndicator extends PanelMenu.Button {
             } catch (e) { /* ignorar */ }
         });
         this.menu.addMenuItem(openItem);
+
+        // Botón: mini navegador de OpenAI (instancia única: si ya corre como
+        // servicio oculto, solo trae su ventana al frente)
+        const openaiBrowserItem = new PopupMenu.PopupMenuItem('🔷  Mostrar navegador OpenAI');
+        openaiBrowserItem.connect('activate', () => {
+            try {
+                Gio.Subprocess.new([openaiBrowserPath()], Gio.SubprocessFlags.NONE);
+            } catch (e) {
+                this._notify('Créditos de OpenAI',
+                    'No se encontró powerzoid-claude-openai-browser — ejecuta install.sh de nuevo.');
+            }
+        });
+        this.menu.addMenuItem(openaiBrowserItem);
 
         // Botón: Ayuda del CLI
         const helpItem = new PopupMenu.PopupMenuItem('?  Cómo actualizar el uso…');

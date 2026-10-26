@@ -123,33 +123,40 @@ powerzoid-claude credits 42.50 --total 100   # con el total, para ver una barra 
 powerzoid-claude credits                     # ver el valor guardado
 ```
 
-### Créditos de la API de OpenAI (automático vía userscript)
+### Créditos de la API de OpenAI (automático vía mini navegador)
 
 OpenAI tampoco expone una API pública para consultar el saldo de créditos de tu cuenta
 (solo se ve en el Home / Billing overview de
 [platform.openai.com](https://platform.openai.com/home), en la tarjeta "Credit balance").
-A diferencia de `platform.claude.com`, el login de OpenAI (`auth.openai.com`) está
-protegido por Cloudflare y **rechaza navegadores controlados por automatización externa**
-(Playwright), incluso en modo visible con login manual — por eso este dato se obtiene
-igual que el saldo de "Usage credits" de claude.ai: con un **userscript** que corre
-dentro de tu sesión real del navegador (sin ningún control externo, así que Cloudflare
-no lo bloquea) y envía el dato al servidor local.
+El login de OpenAI (`auth.openai.com`) está protegido por Cloudflare y **rechaza
+navegadores controlados por Playwright**, así que el saldo se obtiene con
+`powerzoid-claude-openai-browser`: un mini navegador propio (GTK4 + WebKitGTK 6.0,
+`sudo dnf install webkitgtk6.0` si falta) que no lleva marcas de automatización.
 
-**Instalación:** instala Violentmonkey (ver arriba) y luego el userscript:
+- `install.sh` lo deja corriendo oculto como servicio de usuario
+  (`powerzoid-claude-openai-browser.service`, arranca con la sesión gráfica).
+- **Inicias sesión una vez** en su ventana: menú de la extensión →
+  **🔷 Mostrar navegador OpenAI** (o `powerzoid-claude-openai-browser` en una terminal).
+  La sesión queda guardada en `~/.local/share/powerzoid-claude/webview-openai`.
+- Recarga el Billing overview **cada 10 minutos** por su cuenta, lee el saldo y lo
+  escribe en `usage.json`. Como es su propio proceso, no lo congela ningún navegador.
+- Cerrar la ventana solo la oculta. **F5** / **Ctrl+R** recarga, **Alt+Inicio**
+  vuelve al saldo y **Ctrl+Q** lo cierra del todo.
+- Si la sesión expira, abre su ventana en la página de login y te avisa con una
+  notificación.
 
+```bash
+journalctl --user -u powerzoid-claude-openai-browser -f   # ver qué está haciendo
 ```
-userscript/powerzoid-claude-openai-monitor.user.js
-```
-
-Se aplica en cualquier página de `platform.openai.com`. Basta con tener esa pestaña
-abierta (aunque sea en segundo plano) de vez en cuando — el userscript detecta la
-tarjeta "Credit balance" y manda el saldo al servidor local automáticamente, sin que
-tengas que hacer nada más.
 
 El saldo aparece en **azul** (🔷) en la barra superior y en el menú desplegable, para
 distinguirlo del resto de indicadores.
 
-**Respaldo manual** (si prefieres no usar el userscript, o para corregir el valor a mano):
+**Alternativa: userscript.** `userscript/powerzoid-claude-openai-monitor.user.js` hace lo
+mismo dentro de una pestaña de tu navegador (con Violentmonkey), pero depende de que esa
+pestaña no quede congelada en segundo plano.
+
+**Respaldo manual** (para corregir el valor a mano):
 
 ```bash
 powerzoid-claude openai-credits 12.30
@@ -160,7 +167,7 @@ powerzoid-claude openai-credits           # ver el valor guardado
 `powerzoid-claude-openai-poller`, con el mismo enfoque de Playwright que usa el poller
 de Anthropic (`--login`, luego `--watch` o un timer de systemd). En la práctica choca
 con el bloqueo de Cloudflare del login de OpenAI, por lo que `install.sh` no habilita
-su timer automáticamente — el userscript es la vía que sí funciona.
+su timer automáticamente — el mini navegador es la vía que sí funciona.
 
 ### Flujo típico de uso
 
@@ -238,8 +245,8 @@ bash install.sh --uninstall   # próximamente
 # O manualmente:
 gnome-extensions disable powerzoid-claude@cleal.cl
 rm -rf ~/.local/share/gnome-shell/extensions/powerzoid-claude@cleal.cl
-systemctl --user disable --now powerzoid-claude-poller.timer powerzoid-claude-credits-poller.timer powerzoid-claude-openai-poller.timer powerzoid-claude-server.service
-rm ~/.local/bin/powerzoid-claude ~/.local/bin/powerzoid-claude-server ~/.local/bin/powerzoid-claude-poller ~/.local/bin/powerzoid-claude-credits-poller ~/.local/bin/powerzoid-claude-openai-poller
+systemctl --user disable --now powerzoid-claude-poller.timer powerzoid-claude-credits-poller.timer powerzoid-claude-openai-poller.timer powerzoid-claude-openai-browser.service powerzoid-claude-server.service
+rm ~/.local/bin/powerzoid-claude ~/.local/bin/powerzoid-claude-server ~/.local/bin/powerzoid-claude-poller ~/.local/bin/powerzoid-claude-credits-poller ~/.local/bin/powerzoid-claude-openai-poller ~/.local/bin/powerzoid-claude-openai-browser
 rm ~/.config/systemd/user/powerzoid-claude-*.{service,timer}
 rm -rf ~/.local/share/powerzoid-claude    # ← borra datos y las sesiones de navegador de créditos
 ```
