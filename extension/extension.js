@@ -35,6 +35,9 @@ import * as MessageTray from 'resource:///org/gnome/shell/ui/messageTray.js';
 // ── Configuración ──────────────────────────────────────────────────────────
 const USAGE_FILE_PARTS  = ['.local', 'share', 'powerzoid-claude', 'usage.json'];
 const REFRESH_SECONDS   = 30;   // intervalo de refresco por timer
+// Si entre dos ticks del timer pasa más que esto en tiempo real, el equipo
+// estuvo suspendido: se reinicia el conteo de "tiempo en servicio".
+const SUSPEND_GAP_MS    = REFRESH_SECONDS * 4 * 1000;
 const ICON_NEUTRAL      = '⬡';  // hexágono (logo Anthropic)
 const ICON_LOW          = '🟢';
 const ICON_MED          = '🟡';
@@ -57,6 +60,11 @@ const FONT_SIZE_FILE    = 'font-size';
 // refrescarse. powerzoid-claude-poller corre cada 60s (uso y usage credits);
 // powerzoid-claude-credits-poller corre cada 15 min (créditos de API), así
 // que se le da más margen para tolerar corridas fallidas puntuales.
+// La antigüedad se mide desde lo más reciente entre el último dato y el
+// momento en que el equipo entró en servicio (carga de la extensión o
+// regreso de suspensión): así, tras encender el equipo no se avisa por las
+// horas que estuvo apagado, sino solo si los pollers no logran refrescar
+// durante el umbral completo ya en servicio (≈ varios intentos fallidos).
 const STALE_CHECKS = [
     {
         key: 'usage', isoField: 'updated_at_iso', presenceField: 'percentage',
@@ -161,6 +169,8 @@ class ClaudeIndicator extends PanelMenu.Button {
         this._alignItems   = {};
         this._staleNotified = {};   // key → ya se avisó de esta racha de datos viejos
         this._staleActive   = {};   // key → actualmente desactualizado (para el ícono ⚠)
+        this._serviceStartMs = Date.now();  // inicio del período en servicio actual
+        this._lastTickMs     = Date.now();
 
         // ── Widget en la barra superior ──
         const box = new St.BoxLayout({ style_class: 'panel-status-menu-box' });
@@ -381,7 +391,16 @@ class ClaudeIndicator extends PanelMenu.Button {
         this._timerId = GLib.timeout_add_seconds(
             GLib.PRIORITY_DEFAULT,
             REFRESH_SECONDS,
-            () => { this._refresh(); return GLib.SOURCE_CONTINUE; }
+            () => {
+                const now = Date.now();
+                if (now - this._lastTickMs > SUSPEND_GAP_MS) {
+                    log('[PowerZoid Claude] Regreso de suspensión detectado; se reinicia el período de gracia');
+                    this._serviceStartMs = now;
+                }
+                this._lastTickMs = now;
+                this._refresh();
+                return GLib.SOURCE_CONTINUE;
+            }
         );
     }
 
@@ -487,7 +506,7 @@ class ClaudeIndicator extends PanelMenu.Button {
             if (!expired && present && iso) {
                 const ts = Date.parse(iso);
                 if (!Number.isNaN(ts)) {
-                    const ageMin = (Date.now() - ts) / 60000;
+                    const ageMin = (Date.now() - Math.max(ts, this._serviceStartMs)) / 60000;
                     isStale = ageMin > check.thresholdMin;
                 }
             }
