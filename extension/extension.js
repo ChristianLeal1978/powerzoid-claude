@@ -61,16 +61,21 @@ const STALE_CHECKS = [
         key: 'usage', isoField: 'updated_at_iso', presenceField: 'percentage',
         thresholdMin: 10, label: 'Uso de mensajes',
         hint: 'Revisa: systemctl --user status powerzoid-claude-poller.timer',
+        expiredField: 'usage_session_expired', site: 'claude.ai',
+        expiredHint: 'Inicia sesión en claude.ai en tu navegador (Vivaldi/Chrome/Firefox); el poller la toma solo.',
     },
     {
         key: 'usageCredits', isoField: 'usage_credits_balance_updated_at_iso', presenceField: 'usage_credits_balance_usd',
         thresholdMin: 20, label: 'Usage credits (💰)',
         hint: 'Revisa: systemctl --user status powerzoid-claude-poller.timer',
+        expiredField: 'usage_session_expired', site: 'claude.ai',
+        expiredHint: 'Inicia sesión en claude.ai en tu navegador (Vivaldi/Chrome/Firefox); el poller la toma solo.',
     },
     {
         key: 'apiCredits', isoField: 'api_credits_updated_at_iso', presenceField: 'api_credits_usd',
         thresholdMin: 45, label: 'Créditos de API (💳)',
         hint: 'La sesión pudo expirar — ejecuta: powerzoid-claude-credits-poller --login',
+        expiredField: 'api_credits_session_expired', site: 'platform.claude.com',
     },
     {
         key: 'openaiCredits', isoField: 'openai_credits_updated_at_iso', presenceField: 'openai_credits_usd',
@@ -458,7 +463,7 @@ class ClaudeIndicator extends PanelMenu.Button {
         for (const check of STALE_CHECKS) {
             const present  = d[check.presenceField] !== undefined && d[check.presenceField] !== null;
             const iso      = d[check.isoField];
-            const expired  = check.key === 'apiCredits' && d.api_credits_session_expired === true;
+            const expired  = !!check.expiredField && d[check.expiredField] === true;
             let   isStale  = expired;
 
             if (!expired && present && iso) {
@@ -478,7 +483,7 @@ class ClaudeIndicator extends PanelMenu.Button {
                 this._notify(
                     expired ? 'Sesión expirada' : 'Datos desactualizados',
                     expired
-                        ? `${check.label}: la sesión de platform.claude.com expiró.\n${check.hint}`
+                        ? `${check.label}: la sesión de ${check.site} expiró.\n${check.expiredHint || check.hint}`
                         : `${check.label} lleva más de ${check.thresholdMin} min sin refrescarse ` +
                           `(hace ${this._formatAge(iso)}).\n${check.hint}`,
                     'dialog-warning-symbolic'
@@ -572,6 +577,10 @@ class ClaudeIndicator extends PanelMenu.Button {
 
         let resetLine = `  Reset: ${resetAt}`;
         if (updAt) resetLine += `   ·   ${updAt}`;
+        if (d.usage_session_expired === true)
+            resetLine += `\n  ⚠ Sesión de claude.ai expirada — inicia sesión en tu navegador`;
+        else if (stale.usage)
+            resetLine += `\n  ⚠ Sin actualizar hace ${this._formatAge(d.updated_at_iso)}`;
         this._menuReset.label.set_text(resetLine);
 
         // ── Créditos de API (opcional) ──

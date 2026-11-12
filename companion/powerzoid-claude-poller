@@ -363,9 +363,13 @@ def find_best_cookies(domain: str = DOMAIN) -> tuple[dict, str]:
         if not cookies:
             continue
 
+        status = "▶ corriendo" if running else "■ cerrado"
+        if "sessionKey" not in cookies:
+            log(f"  {browser['name']:10s} {status}  sin sesión iniciada en claude.ai", B)
+            continue
+
         # Penalizar navegadores que no están en ejecución (restar 10h)
         effective_access = last_access if running else last_access - 36_000
-        status = "▶ corriendo" if running else "■ cerrado"
         log(f"  {browser['name']:10s} {status}  "
             f"última sesión: {fmt_ago(last_access)}", B)
 
@@ -399,7 +403,15 @@ def cookies_to_header(cookies: dict) -> str:
     return "; ".join(f"{k}={v}" for k, v in cookies.items())
 
 
+# Se pone en True cuando claude.ai responde que la sesión no es válida
+# (cookie sessionKey vencida o revocada).
+SESSION_INVALID = False
+
+SESSION_INVALID_CODES = {"account_session_invalid", "session_expired", "unauthorized"}
+
+
 def api_get(path: str, cookies: dict):
+    global SESSION_INVALID
     url     = f"https://claude.ai{path}"
     headers = {
         "Cookie"          : cookies_to_header(cookies),
@@ -413,7 +425,17 @@ def api_get(path: str, cookies: dict):
         with urllib.request.urlopen(req, timeout=10) as resp:
             return json.loads(resp.read())
     except urllib.error.HTTPError as e:
-        log(f"HTTP {e.code} en {path}", Y)
+        detail = ""
+        if e.code in (401, 403):
+            try:
+                err = json.loads(e.read()).get("error", {})
+                code = (err.get("details") or {}).get("error_code") or err.get("type", "")
+                if code in SESSION_INVALID_CODES or e.code == 401:
+                    SESSION_INVALID = True
+                detail = f" ({code})" if code else ""
+            except Exception:
+                pass
+        log(f"HTTP {e.code} en {path}{detail}", Y)
         return None
     except Exception as e:
         log(f"Error en {path}: {e}", R)
@@ -543,6 +565,20 @@ def save_usage(usage: dict):
         f"({merged.get('used','?')}/{merged.get('limit','?')})", G)
 
 
+def set_session_expired(expired: bool):
+    """Marca en usage.json si la sesión de claude.ai expiró (lo lee la extensión)."""
+    if not USAGE_FILE.exists():
+        return
+    try:
+        data = json.loads(USAGE_FILE.read_text())
+    except Exception:
+        return
+    if data.get("usage_session_expired", False) == expired:
+        return
+    data["usage_session_expired"] = expired
+    USAGE_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+
+
 def save_credits_balance(balance_usd: float):
     USAGE_DIR.mkdir(parents=True, exist_ok=True)
     existing = {}
@@ -571,7 +607,9 @@ def run_once(verbose=True) -> bool:
     cookies, browser_name = find_best_cookies()
 
     if not cookies:
-        log("No se encontró ninguna sesión de claude.ai en ningún navegador.", R)
+        log("No se encontró ninguna sesión de claude.ai en ningún navegador. "
+            "Inicia sesión en claude.ai en Vivaldi, Chrome o Firefox.", R)
+        set_session_expired(True)
         return False
 
     log(f"Usando cookies de {BOLD}{browser_name}{NC}", G)
@@ -593,6 +631,13 @@ def run_once(verbose=True) -> bool:
             ok = True
         else:
             log("No se encontró el saldo de usage credits.", Y)
+
+    if ok:
+        set_session_expired(False)
+    elif SESSION_INVALID:
+        log(f"La sesión de claude.ai en {browser_name} expiró. "
+            "Vuelve a iniciar sesión en claude.ai en el navegador.", R)
+        set_session_expired(True)
 
     return ok
 
